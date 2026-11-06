@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
+import { join } from "node:path";
+import { findOnPath, toGatePath } from "../win32";
 import type { Guard, SeatRef } from "./guard";
+import type { ShellKind } from "./gate/evaluate";
 
 /** The thin hooks each agent CLI runs before a tool call, and the answer each reads; a hook finds the guard by GATE_ENV. */
 
@@ -22,13 +25,14 @@ const READ_TOOLS: Record<string, boolean> = {
   list: false,
 };
 const QUESTION_TOOLS = new Set(["request_user_input", "request_user_input_async"]);
-const ASK_BY_MAIL =
+export const ASK_BY_MAIL =
   "Ask in your final message, or by mail with seatwork_mail: a question asked here keeps you in your turn, and nobody in the room sees it.";
 const MOVES_TREE =
   "`{command}` moves the tree every seat in this project works in: their uncommitted work moves with it. Unless your brief asked for it, put it back now. The code without a change is in a `seatwork_safety` `control`.";
 
 interface Call {
   shell: string | null;
+  kind: ShellKind;
   writes: string[];
   read: { path: string; whole: boolean } | null;
   texts: Map<string, string>;
@@ -36,19 +40,28 @@ interface Call {
   refused: string | null;
 }
 
+/** The grammar a tool call's `command` is written in: Codex's shell is PowerShell wherever it runs, OpenCode's is cmd on Windows and sh elsewhere; Claude and Pi name theirs on the call. */
+function shellKind(cli: Cli, tool: string): ShellKind {
+  if (cli === "codex") return "ps";
+  if (cli === "opencode") return process.platform === "win32" ? "cmd" : "sh";
+  return tool === "PowerShell" || tool === "powershell" ? "ps" : "sh";
+}
+
 const MOST_FILES = 200;
 const MOST_PATCH_CHARS = 2 * 1024 * 1024;
 const MOST_PATH_CHARS = 4096;
 
 /** The tool call inside a hook's payload: the shell line it runs, or the files it writes; the guard reads only the first files of a large call, the call runs whole. */
-function callOf(body: Record<string, unknown>): Call {
+function callOf(body: Record<string, unknown>, cli: Cli): Call {
   const input = (body.tool_input ?? body.input ?? {}) as Record<string, unknown>;
   const tool = String(body.tool_name ?? body.tool ?? "");
   const cwd = typeof body.cwd === "string" ? body.cwd : null;
-  const call: Call = { shell: null, writes: [], read: null, texts: new Map(), cwd, refused: null };
+  const call: Call = { shell: null, kind: "sh", writes: [], read: null, texts: new Map(), cwd, refused: null };
   const patch = tool === "apply_patch" ? input.command : tool === "patch" ? input.patchText : null;
-  if (SHELL_TOOLS.has(tool) && typeof input.command === "string") call.shell = input.command;
-  else if (typeof patch === "string") patchOf(patch, call);
+  if (SHELL_TOOLS.has(tool) && typeof input.command === "string") {
+    call.shell = input.command;
+    call.kind = shellKind(cli, tool);
+  } else if (typeof patch === "string") patchOf(patch, call);
   else if (QUESTION_TOOLS.has(tool)) call.refused = ASK_BY_MAIL;
   else if (Object.hasOwn(READ_TOOLS, tool)) {
     const path = input.path ?? input.file_path ?? input.filePath ?? ".";
@@ -109,12 +122,12 @@ export async function answerHook(
   seat: SeatRef | null,
   note?: string,
 ): Promise<{ type: string; text: string; noted: boolean; wrote: string | null }> {
-  const call = callOf(body);
+  const call = callOf(body, cli);
   if (call.refused) return { ...render(cli, { refused: call.refused }), noted: false, wrote: null };
   let wrote: string | null = null;
   let moved: string | null = null;
   if (call.shell !== null) {
-    const checked = await guard.check(seat, cli, call.shell, call.cwd);
+    const checked = await guard.check(seat, cli, call.shell, call.cwd, call.kind);
     if (checked.writes) wrote = call.shell;
     if (checked.moves) moved = MOVES_TREE.replace("{command}", checked.moves.slice(0, 200));
   }
@@ -128,7 +141,11 @@ export async function answerHook(
   return { ...render(cli, { note: notes || undefined }), noted: Boolean(note), wrote };
 }
 
-const absolute = (path: string, cwd: string | null) => (path.startsWith("/") || !cwd ? path : `${cwd}/${path}`);
+/** A path as the gate spells it, made absolute on the call's cwd when it is not already. */
+export const absolute = (path: string, cwd: string | null) => {
+  const spelled = toGatePath(path);
+  return spelled.startsWith("/") || !cwd ? spelled : `${toGatePath(cwd).replace(/\/+$/, "")}/${spelled}`;
+};
 
 /** An answer in the shape its CLI reads: hook JSON for Claude and Codex, the note alone for Pi and OpenCode, which ask about no tool the room refuses. */
 export function render(cli: Cli, answer: { refused?: string; note?: string }): { type: string; text: string } {
@@ -146,36 +163,75 @@ export function render(cli: Cli, answer: { refused?: string; note?: string }): {
 const ASK_SECONDS = 4;
 const RETRY_SECONDS = 3;
 
-/** The script Claude and Codex run inline: it hands the payload to the room and prints the answer; with no answer the call runs. */
-function gateScript(): string {
-  return `# The room's hook: tells the room of this tool call and prints its answer.
-url="\${${GATE_ENV.url}:-}"
-[ -n "$url" ] || exit 0
-answer=$(curl --silent --fail --max-time "\${${GATE_ENV.seconds}:-${ASK_SECONDS}}" --retry 3 --retry-connrefused --retry-delay 1 --retry-max-time ${RETRY_SECONDS} --header "Content-Type: application/json" --header "X-Seat: \${${GATE_ENV.seat}:-}" --data-binary @- "$url?cli=$1" 2>/dev/null) && printf '%s' "$answer"
-exit 0
+/** The Node a hook's command names: one on PATH where there is one, else the binary the daemon runs on. */
+const hookNode = () => findOnPath("node") ?? process.execPath;
+
+/** The file name the gate hook is laid down under, next to a runtime's hooks.json or a Claude plugin's hooks/. */
+export const GUARD_FILE = "room-guard.mjs";
+
+/** The hook script Claude and Codex run: it hands the payload to the room and prints the answer; with no answer the call runs. */
+export function guardScript(): string {
+  return `// The room's hook: tells the room of this tool call and prints its answer.
+const url = process.env.${GATE_ENV.url};
+if (!url) process.exit(0);
+const cli = process.argv[2] ?? "";
+const input = await new Promise((done) => {
+  let text = "";
+  process.stdin.setEncoding("utf8").on("data", (piece) => (text += piece)).on("end", () => done(text));
+});
+const deadline = Date.now() + ${RETRY_SECONDS * 1000};
+for (;;) {
+  try {
+    const res = await fetch(\`\${url}?cli=\${cli}\`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-seat": process.env.${GATE_ENV.seat} ?? "" },
+      body: input,
+      signal: AbortSignal.timeout(Number(process.env.${GATE_ENV.seconds} ?? ${ASK_SECONDS}) * 1000),
+    });
+    if (res.ok) process.stdout.write(await res.text());
+    break;
+  } catch {
+    if (Date.now() >= deadline) break;
+    await new Promise((wait) => setTimeout(wait, 700));
+  }
+}
 `;
 }
 
 export const SKILLS_ENV = "ROOM_SKILLS_DIR";
 
 /** Prints the name and description of each skill in the seat's folder: after a compaction Claude Code has dropped its own list. */
-function skillsScript(): string {
-  return `dir="\${${SKILLS_ENV}:-}"
-[ -d "$dir" ] || exit 0
-echo "After the compaction, your skills, each loaded by the Skill tool when its moment comes:"
-for file in "$dir"/*/SKILL.md; do
-  [ -f "$file" ] || continue
-  name=$(sed -n 's/^name:[[:space:]]*//p' "$file" | head -n 1)
-  about=$(sed -n 's/^description:[[:space:]]*//p' "$file" | head -n 1 | sed 's/^"//; s/"$//')
-  echo "- $name: $about"
-done
+export function skillsScript(): string {
+  return `// The seat's skills, told again after a compaction.
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+const dir = process.env.${SKILLS_ENV};
+if (!dir) process.exit(0);
+let entries = [];
+try {
+  entries = readdirSync(dir, { withFileTypes: true });
+} catch {
+  process.exit(0);
+}
+console.log("After the compaction, your skills, each loaded by the Skill tool when its moment comes:");
+for (const entry of entries) {
+  if (!entry.isDirectory()) continue;
+  try {
+    const text = readFileSync(join(dir, entry.name, "SKILL.md"), "utf8");
+    const name = /^name:[ \\t]*(.*)$/m.exec(text)?.[1]?.trim();
+    const about = /^description:[ \\t]*(.*)$/m.exec(text)?.[1]?.trim().replace(/^"|"$/g, "");
+    if (name) console.log(\`- \${name}: \${about ?? ""}\`);
+  } catch {}
+}
 `;
 }
 
-/** A Claude plugin folder, loaded with --plugin-dir: its manifest, its PreToolUse hook, and its skills told again after a compaction. */
-export function claudePlugin(): Record<string, string> {
+/** A Claude plugin folder at `dir`, loaded with --plugin-dir: its manifest, its PreToolUse hook run straight under Node, and its skills told again after a compaction. */
+export function claudePlugin(dir: string): Record<string, string> {
   return {
     ".claude-plugin/plugin.json": `${JSON.stringify({ name: "room-guard", description: "The room's hook: every shell command and file write is told to the room first." }, null, 2)}\n`,
+    [`hooks/${GUARD_FILE}`]: guardScript(),
+    [`hooks/${SKILLS_FILE}`]: skillsScript(),
     "hooks/hooks.json": `${JSON.stringify(
       {
         hooks: {
@@ -185,8 +241,8 @@ export function claudePlugin(): Record<string, string> {
               hooks: [
                 {
                   type: "command",
-                  command: "/bin/sh",
-                  args: ["-c", gateScript(), "room-guard", "claude"],
+                  command: hookNode(),
+                  args: [join(dir, "hooks", GUARD_FILE), "claude"],
                   timeout: 10,
                 },
               ],
@@ -195,7 +251,7 @@ export function claudePlugin(): Record<string, string> {
           SessionStart: [
             {
               matcher: "compact",
-              hooks: [{ type: "command", command: "/bin/sh", args: ["-c", skillsScript()], timeout: 10 }],
+              hooks: [{ type: "command", command: hookNode(), args: [join(dir, "hooks", SKILLS_FILE)], timeout: 10 }],
             },
           ],
         },
@@ -206,21 +262,25 @@ export function claudePlugin(): Record<string, string> {
   };
 }
 
+const SKILLS_FILE = "room-skills.mjs";
 const CODEX_MATCHER = "^(Bash|apply_patch|request_user_input|request_user_input_async)$";
 const CODEX_TIMEOUT = 10;
 
-/** Codex runs a hook's command line through the user's shell, so the script goes in quoted. */
-const codexCommand = () => `/bin/sh -c '${gateScript().replace(/'/g, "'\\''")}' room-guard codex`;
+/** The line Codex's shell runs for the hook at `dir`: one spelling the platform's shell reads — sh on POSIX, the call operator on Windows's PowerShell. */
+const codexCommand = (dir: string) =>
+  process.platform === "win32"
+    ? `& '${hookNode()}' '${join(dir, GUARD_FILE)}' codex`
+    : `'${hookNode()}' '${join(dir, GUARD_FILE)}' codex`;
 
-/** Codex's hooks.json for a seat's home. */
-export function codexHooks(): string {
+/** Codex's hooks.json for a seat's home at `dir`; its gate script is laid down beside it. */
+export function codexHooks(dir: string): string {
   return `${JSON.stringify(
     {
       hooks: {
         PreToolUse: [
           {
             matcher: CODEX_MATCHER,
-            hooks: [{ type: "command", command: codexCommand(), timeout: CODEX_TIMEOUT }],
+            hooks: [{ type: "command", command: codexCommand(dir), timeout: CODEX_TIMEOUT }],
           },
         ],
       },
@@ -231,10 +291,10 @@ export function codexHooks(): string {
 }
 
 /** The trust Codex keeps for a hook it runs without review: its key and definition hash. */
-export function codexTrust(hooksFile: string): { key: string; hash: string } {
+export function codexTrust(hooksFile: string, dir: string): { key: string; hash: string } {
   const identity = {
     event_name: "pre_tool_use",
-    hooks: [{ async: false, command: codexCommand(), timeout: CODEX_TIMEOUT, type: "command" }],
+    hooks: [{ async: false, command: codexCommand(dir), timeout: CODEX_TIMEOUT, type: "command" }],
     matcher: CODEX_MATCHER,
   };
   const hash = createHash("sha256").update(canonical(identity)).digest("hex");

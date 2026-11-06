@@ -1,5 +1,5 @@
 {
-  "$comment": "The seat every install gets: the room's own, which ships with the plugin. A worker seat comes from the model table (room/models.json, a project's own table) or from what this machine added (setup.json). Harnesses: claude, codex, pi, opencode; any harness can hold any role.",
+  "$comment": "The seat every install gets: the room's own, which ships with the plugin. A worker seat comes from the model table (room/models.json, a project's own table) or from what this machine added (setup.json). Harnesses: claude, codex, pi, opencode, devin, grok; any harness can hold any role.",
   "seats": {
     "hq": ["claude"]
   },

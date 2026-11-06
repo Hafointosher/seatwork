@@ -3,42 +3,43 @@
   "seats": {
     "hq": {
       "provider": "claude-hq/claude-opus-5-5",
-      "thinking": "high"
+      "thinking": "high",
+      "alternatives": ["devin-hq/swe-2-high", "grok-hq/grok-4.7"]
     },
     "supervisor": {
       "provider": "claude-supervisor/claude-opus-5-5",
       "thinking": "high",
-      "alternatives": []
+      "alternatives": ["devin-supervisor/swe-2-high", "grok-supervisor/grok-4.7"]
     },
     "lead": {
       "provider": "claude-lead/claude-opus-5-5",
       "thinking": "high",
-      "alternatives": []
+      "alternatives": ["devin-lead/swe-2-high", "grok-lead/grok-4.7"]
     }
   },
   "peer": {
     "reviewThinking": "high",
     "tiers": {
       "cheap": {
-        "providers": ["claude-peer/claude-haiku-5-5"],
+        "providers": ["claude-peer/claude-haiku-5-5", "devin-peer/swe-2-flash-medium"],
         "thinking": "high",
         "use": "mechanical, fully specified: extraction, renames, formatting, log triage, doc edits, test scaffolds",
         "never": "anything needing judgement about behavior"
       },
       "default": {
-        "providers": ["claude-peer/claude-sonnet-5-5"],
+        "providers": ["claude-peer/claude-sonnet-5-5", "devin-peer/swe-2-high"],
         "thinking": "high",
         "use": "implementation, debugging, multi-file changes with invariants, research with judgement",
         "never": "the review of a candidate a Claude Peer wrote"
       },
       "cross-family": {
-        "providers": ["codex-peer/gpt-6.1-sol"],
+        "providers": ["codex-peer/gpt-6.1-sol", "grok-peer/grok-4.6"],
         "thinking": "high",
         "use": "the reviewer of a Claude-written candidate, a tie-break, a retry after a Claude Peer failed, one of two lenses",
         "never": "a rung on the ladder"
       },
       "high": {
-        "providers": ["codex-peer/gpt-6-astra"],
+        "providers": ["codex-peer/gpt-6-astra", "grok-peer/grok-4.7"],
         "thinking": "high",
         "use": "a hard question or design (spec arch or review), a lens when the question is hard",
         "never": "routine implementation"
@@ -55,6 +56,8 @@
     "claude": "bypassPermissions",
     "codex": "full-access",
     "pi": null,
-    "opencode": "build"
+    "opencode": "build",
+    "devin": "accept-edits",
+    "grok": null
   }
 }

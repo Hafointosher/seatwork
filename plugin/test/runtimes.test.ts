@@ -161,14 +161,18 @@ test("a Pi seat's home takes the user's settings without their packages, extensi
     theme: "dark",
     packages: [],
     extensions: [],
-    skills: [`!${join(USER_HOME, ".agents", "skills")}/**`],
+    skills: [`!${join(USER_HOME, ".agents", "skills").replace(/\\/g, "/")}/**`],
   });
 });
 
 test("a Claude seat's skill folder holds the role's skills as they are named now: a link to a skill that is gone is dropped", () => {
   ensureRuntime({ harness: "claude", role: "peer" }, loadPolicy());
   const skills = join(claudeRoleDir("peer"), ".claude", "skills");
-  symlinkSync(join(skills, "..", "no-such-skill"), join(skills, "seatwork-hard-cut"));
+  symlinkSync(
+    join(skills, "..", "no-such-skill"),
+    join(skills, "seatwork-hard-cut"),
+    process.platform === "win32" ? "junction" : undefined,
+  );
   ensureRuntime({ harness: "claude", role: "peer" }, loadPolicy());
   assert.deepEqual(readdirSync(skills).sort(), roleSkillNames("peer"));
   assert.ok(existsSync(join(skills, "test-audit", "SKILL.md")));
@@ -213,11 +217,16 @@ test("a seat's home holds the guard's hook when the guard is on: Codex's hooks.j
   const on = homes("on");
   const [hook] = JSON.parse(readFileSync(on.codexHooks, "utf8")).hooks.PreToolUse;
   assert.equal(hook.matcher, "^(Bash|apply_patch|request_user_input|request_user_input_async)$");
-  assert.match(hook.hooks[0].command, /^\/bin\/sh -c '[\s\S]+' room-guard codex$/);
+  assert.match(
+    hook.hooks[0].command,
+    process.platform === "win32"
+      ? /^& '.+\.exe' '[^']+room-guard\.mjs' codex$/
+      : /^\/bin\/sh -c '[\s\S]+' room-guard codex$/,
+  );
   assert.match(
     on.codexConfig,
     new RegExp(
-      `\\[hooks\\.state\\."${on.codexHooks.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}:pre_tool_use:0:0"\\]\\ntrusted_hash = "sha256:[0-9a-f]{64}"`,
+      `\\[hooks\\.state\\."${on.codexHooks.replace(/\\/g, "\\\\").replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}:pre_tool_use:0:0"\\]\\ntrusted_hash = "sha256:[0-9a-f]{64}"`,
     ),
   );
   assert.ok(existsSync(on.pi) && existsSync(on.opencode));
@@ -255,7 +264,9 @@ test("a Codex, Pi or OpenCode seat is shown the room's skills only: the user's o
         [JSON.stringify(join(mine, "mine", "SKILL.md")), "false"],
       ],
     );
-    assert.deepEqual(JSON.parse(readFileSync(join(home("pi"), "settings.json"), "utf8")).skills, [`!${mine}/**`]);
+    assert.deepEqual(JSON.parse(readFileSync(join(home("pi"), "settings.json"), "utf8")).skills, [
+      `!${mine.replace(/\\/g, "/")}/**`,
+    ]);
     assert.deepEqual(JSON.parse(readFileSync(join(home("opencode"), "opencode.json"), "utf8")).permission, {
       task: "deny",
       question: "deny",

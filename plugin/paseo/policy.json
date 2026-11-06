@@ -232,8 +232,22 @@
       }
     }
   },
+  "devin": {
+    "$comment": "A Devin seat shares the user's Devin sign-in (~/.config/devin), as a Claude seat shares ~/.claude: it has no home of its own. Devin runs over ACP, where no hook of the room's can be laid: the room reads and answers each of its permission requests instead, by the same guard the CLI hooks read. Its session mode is room/models.json's modes.devin. Its provider extends ACP itself and launches command.",
+    "launch": {
+      "command": ["devin", "acp"],
+      "env": {}
+    }
+  },
+  "grok": {
+    "$comment": "A Grok seat shares the user's Grok sign-in (~/.grok): it has no home of its own. Grok runs over ACP, where no hook of the room's can be laid: the room reads and answers each of its permission requests instead, by the same guard the CLI hooks read. Grok lists no session modes, so a seat starts on the mode its creator gave or the daemon's own. Its provider extends ACP itself and launches command.",
+    "launch": {
+      "command": ["grok", "agent", "stdio"],
+      "env": {}
+    }
+  },
   "daemon": {
-    "$comment": "Daemon-wide switches set at setup and given back at Remove while the room's value still stands; they reach every agent on the host, not only seats. browserTools and enableTerminalAgentHooks: Paseo's browser tools and terminal agent hooks. bundledSkills none: Paseo's bundled skills kept out of agents. voice false: dictation and voice mode off, from the daemon's next restart. ownAgentTools roles: an agent of the owner's own claude, codex, pi or opencode keeps the Paseo tools the room's roles use and no other; any other value leaves them as the owner has them. ownAgentMode room: such an agent starts in the mode the room's seats run in (room/models.json modes), as a seat does whatever mode its creator asked; any other value leaves the mode its creator picked.",
+    "$comment": "Daemon-wide switches set at setup and given back at Remove while the room's value still stands; they reach every agent on the host, not only seats. browserTools and enableTerminalAgentHooks: Paseo's browser tools and terminal agent hooks. bundledSkills none: Paseo's bundled skills kept out of agents. voice false: dictation and voice mode off, from the daemon's next restart. ownAgentTools roles: an agent of the owner's own claude, codex, pi, opencode, devin or grok keeps the Paseo tools the room's roles use and no other; any other value leaves them as the owner has them. ownAgentMode room: such an agent starts in the mode the room's seats run in (room/models.json modes), as a seat does whatever mode its creator asked; any other value leaves the mode its creator picked.",
     "browserTools": true,
     "enableTerminalAgentHooks": true,
     "bundledSkills": "none",
@@ -253,7 +267,9 @@
       "claude": "hold",
       "codex": "hold",
       "pi": "hold",
-      "opencode": "hold"
+      "opencode": "hold",
+      "devin": "hold",
+      "grok": "hold"
     },
     "$comment_midTurn": "Mail to a running seat. hold: delivered when its turn ends. steer: Paseo's steer, under which Claude cancels its running tool and Pi aborts it. Keep hold until a harness is seen to apply steer after the tool call."
   },

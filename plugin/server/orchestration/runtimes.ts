@@ -13,6 +13,7 @@ import {
 import { isAbsolute, join } from "node:path";
 import {
   CODEX_HOME,
+  LOCAL_SKILLS_DIR,
   OPENCODE_CONFIG_HOME,
   PI_HOME,
   ROLE_SKILLS_DIR,
@@ -22,11 +23,12 @@ import {
   USER_AGENTS_SKILLS,
   USER_HOME,
 } from "../paths";
+import { IS_WINDOWS, shareEntry, sharesEntry } from "../win32";
 import { loadPolicy, type RuntimePolicy } from "../policy";
-import { codexHooks, codexTrust, openCodePlugin, piExtension } from "../safety/hooks";
+import { codexHooks, codexTrust, GUARD_FILE, guardScript, openCodePlugin, piExtension } from "../safety/hooks";
 import { localSkills, localSkillsOf, skillsIn } from "./local-skills";
 import type { TurnEvent } from "../host";
-import type { Harness, Seat } from "./seats";
+import { ACP_HARNESSES, type Harness, type Seat } from "./seats";
 import { formatToml, parseToml, type TomlTable } from "../toml";
 
 /** Keeps a seat apart from the user's setup: a home under runtimes/, or launch flags for Claude. */
@@ -43,25 +45,35 @@ function ensureDir(path: string): void {
   mkdirSync(path, { recursive: true });
 }
 
-/** Links `name` inside the runtime to the same name in the user's home, if it exists there; what is already there stays, symlink or not. */
+/** Links `name` inside the runtime to the same name in the user's home, if it exists there; what is already there stays, linked or not. */
 function share(runtime: string, home: string, name: string): void {
   const target = join(home, name);
   const link = join(runtime, name);
   if (!existsSync(target)) return;
   if (lstatSync(link, { throwIfNoEntry: false })) return;
-  symlinkSync(target, link);
+  shareEntry(target, link);
 }
 
-/** Drops the symlinks a previous build created (top level and skills/); session state is kept. */
+/** Drops the links a previous build created (top level and skills/); session state is kept. */
 function pruneLinks(runtime: string): void {
   for (const sub of ["", "skills"]) {
     const dir = join(runtime, sub);
     if (!existsSync(dir)) continue;
     for (const name of readdirSync(dir)) {
       const path = join(dir, name);
-      if (lstatSync(path).isSymbolicLink()) unlinkSync(path);
+      if (lstatSync(path).isSymbolicLink()) {
+        unlinkSync(path);
+        continue;
+      }
+      if (IS_WINDOWS && homesOf(runtime).some((home) => existsSync(home) && sharesEntry(path, join(home, name))))
+        unlinkSync(path);
     }
   }
+}
+
+/** The homes `share` links from, for pruning hard links on Windows. */
+function homesOf(runtime: string): string[] {
+  return [CODEX_HOME, PI_HOME, OPENCODE_CONFIG_HOME, join(ROOM_DIR, "skills"), LOCAL_SKILLS_DIR, join(runtime, "..")];
 }
 
 /** A JSON object read from a file; empty where the file is absent or holds anything else. */
@@ -146,8 +158,9 @@ function buildCodex(runtime: string, policy: RuntimePolicy["codex"], guarded: bo
   if (off.length) skills.set("config", off);
   // the guard's hook, trusted here or Codex holds it for review
   if (guarded) {
-    lay(runtime, "hooks.json", codexHooks());
-    const trust = codexTrust(join(runtime, "hooks.json"));
+    lay(runtime, "hooks.json", codexHooks(runtime));
+    lay(runtime, GUARD_FILE, guardScript());
+    const trust = codexTrust(join(runtime, "hooks.json"), runtime);
     const state: TomlTable = new Map();
     state.set(JSON.stringify(trust.key), new Map([["trusted_hash", JSON.stringify(trust.hash)]]));
     table("hooks").set("state", state);
@@ -165,7 +178,7 @@ function buildPi(runtime: string, policy: RuntimePolicy["pi"], guarded: boolean)
   writeJson(join(runtime, "settings.json"), {
     ...readJsonObject(join(PI_HOME, "settings.json")),
     ...policy.settings,
-    skills: [`!${USER_AGENTS_SKILLS}/**`],
+    skills: [`!${USER_AGENTS_SKILLS.replace(/\\/g, "/")}/**`],
   });
   if (guarded) lay(runtime, "extensions/room-guard.ts", piExtension());
   for (const name of policy.shareFiles) share(runtime, PI_HOME, name);
@@ -223,7 +236,10 @@ export function roleSkillNames(role: string): string[] {
   return [...new Set([...ownSkills(role), ...sharedSkills(role), ...localSkills(role)])].sort();
 }
 
-/** The home of a Codex, Pi or OpenCode seat; a Claude seat has none. */
+/** The harnesses a seat's home is built for: Claude shares the user's, the ACP harnesses run on their sign-in. */
+type RuntimeHarness = Exclude<Harness, "claude" | "devin" | "grok">;
+
+/** The home of a Codex, Pi or OpenCode seat; a Claude or ACP seat has none. */
 export function runtimeDir(seat: Pick<Seat, "harness" | "role">): string {
   return join(RUNTIMES_DIR, seat.harness, seat.role);
 }
@@ -234,7 +250,7 @@ export function claudeRoleDir(role: string): string {
 }
 
 /** Lays out a seat's home for its harness. */
-function build(seat: { harness: Exclude<Harness, "claude">; role: string }, dir: string, policy: RuntimePolicy): void {
+function build(seat: { harness: RuntimeHarness; role: string }, dir: string, policy: RuntimePolicy): void {
   const guarded = policy.safety?.mode !== "off";
   switch (seat.harness) {
     case "codex":
@@ -247,10 +263,7 @@ function build(seat: { harness: Exclude<Harness, "claude">; role: string }, dir:
 }
 
 /** What a build is made from: RUNTIME_VERSION, the harness's policy, the user file it copies, the skills it names. */
-function fingerprint(
-  seat: Pick<Seat, "role"> & { harness: Exclude<Harness, "claude"> },
-  policy: RuntimePolicy,
-): string {
+function fingerprint(seat: { harness: RuntimeHarness; role: string }, policy: RuntimePolicy): string {
   const { harness, role } = seat;
   const copied =
     harness === "codex" ? join(CODEX_HOME, "config.toml") : harness === "pi" ? join(PI_HOME, "settings.json") : null;
@@ -262,15 +275,16 @@ function fingerprint(
     .digest("hex");
 }
 
-/** Lays out a seat's home and its role's skills, rebuilding the home when its fingerprint changes; null for Claude, which has none. */
+/** Lays out a seat's home and its role's skills, rebuilding the home when its fingerprint changes; null for Claude and the ACP harnesses, which run on the user's sign-in and read no skills folder of the room's. */
 export function ensureRuntime(seat: Pick<Seat, "harness" | "role">, policy: RuntimePolicy): string | null {
+  if (ACP_HARNESSES.has(seat.harness)) return null;
   if (seat.harness === "claude") {
     installRoleSkills("", seat);
     return null;
   }
   const dir = runtimeDir(seat);
   const marker = join(dir, MARKER);
-  const own = { harness: seat.harness, role: seat.role };
+  const own = { harness: seat.harness as RuntimeHarness, role: seat.role };
   const print = fingerprint(own, policy);
   if (readJsonObject(marker).fingerprint !== print) {
     ensureDir(dir);
@@ -300,7 +314,7 @@ export function sharedInstructions(policy: RuntimePolicy): string | null {
 
 /** The environment every session of a seat opens with (policy `launch.env`), `{runtime}` filled with the seat's home. */
 export function envFor(seat: Pick<Seat, "harness" | "role">, policy: RuntimePolicy): Record<string, string> {
-  const home = seat.harness === "claude" ? "" : runtimeDir(seat);
+  const home = seat.harness === "claude" || ACP_HARNESSES.has(seat.harness) ? "" : runtimeDir(seat);
   return Object.fromEntries(
     Object.entries(policy.launch[seat.harness].env).map(([name, value]) => [name, value.replaceAll("{runtime}", home)]),
   );
@@ -313,6 +327,8 @@ export function describeIsolation(policy: RuntimePolicy = loadPolicy()): string 
     `codex: strips [${policy.codex.stripTables.join(",")}], features off ${policy.codex.featuresOff.length}, user and bundled skills off`,
     `pi: shares ${policy.pi.shareFiles.join(",")}; no user package, extension or skill`,
     `opencode: task denied, built-in subagents disabled, only the role's skills`,
+    `devin: user sign-in, guarded through its permission requests`,
+    `grok: user sign-in, guarded through its permission requests`,
   ].join(" | ");
 }
 

@@ -1,7 +1,7 @@
 import type { PluginBeforeRequests, PluginServerContext } from "@getpaseo/plugin/server";
 import limits from "../../shared/host.json";
 import type { TurnOutcome } from "../host";
-import { parseSeat } from "../orchestration/seats";
+import { ACP_HARNESSES, parseSeat } from "../orchestration/seats";
 import type { Room, SeatEvent } from "../room/room";
 import type { PaseoApi } from "./api";
 import type { PaseoHost } from "./host";
@@ -159,7 +159,24 @@ export function connect(server: Pick<PluginServerContext, "on" | "before">, room
       room.closed(event.agent.id);
     }),
     server.on("agent.permission_requested", async (event, { paseo }) => {
-      if (parseSeat(event.agent.provider)) await enter(paseo).permissionAsked(seatOf(event.agent), event.request);
+      const seat = parseSeat(event.agent.provider);
+      if (!seat) return;
+      // an ACP harness has no hooks: the room reads the request by its guard and answers it, and only what it cannot answer is mailed up for a person
+      if (ACP_HARNESSES.has(seat.harness)) {
+        try {
+          const answer = await enter(paseo).answerPermission(seatOf(event.agent), event.request);
+          if (answer) {
+            await paseo.agents.ref(event.agent.id).respondToPermission({
+              requestId: event.request.id,
+              response: answer.allow ? { behavior: "allow" } : { behavior: "deny", message: answer.message },
+            });
+            return;
+          }
+        } catch (error) {
+          console.error(`seatwork: answering ${event.agent.id}'s permission failed; it waits for a person`, error);
+        }
+      }
+      await enter(paseo).permissionAsked(seatOf(event.agent), event.request);
     }),
     // a permission answered in Paseo, by anyone, settles the PERMISSION mail that asked for it
     server.on("agent.permission_resolved", (event, { paseo }) => {

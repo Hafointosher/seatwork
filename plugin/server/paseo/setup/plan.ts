@@ -4,7 +4,8 @@ import { allowed, layModels, tiersOf, type Models } from "../../orchestration/mo
 import { PASEO_HOME } from "../../paths";
 import { claudeDisallowed } from "../../policy";
 import { secretsOf } from "../../safety/gate/rules/secrets";
-import { HARNESSES, parseSeat, type Harness } from "../../orchestration/seats";
+import { fromGatePath } from "../../win32";
+import { ACP_HARNESSES, HARNESSES, parseSeat, type Harness } from "../../orchestration/seats";
 import { ROLES, traits } from "../../../shared/workflow";
 import { keptChanges, layOver } from "./policy-changes";
 
@@ -38,6 +39,7 @@ interface ProviderEntry {
   description: string;
   paseoTools: PaseoTools;
   env: Record<string, string>;
+  command?: string[];
   options?: { extraArgs?: Record<string, string | null>; permission?: Record<string, unknown> };
   disallowedTools?: string[];
   models?: Record<string, unknown>[];
@@ -74,12 +76,21 @@ export interface RoomPlan {
   warnings: string[];
 }
 
-const LABEL: Record<Harness, string> = { claude: "Claude", codex: "Codex", pi: "Pi", opencode: "OpenCode" };
+const LABEL: Record<Harness, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  pi: "Pi",
+  opencode: "OpenCode",
+  devin: "Devin",
+  grok: "Grok",
+};
 const ISOLATION: Record<Harness, string> = {
   claude: "on the user's Claude sign-in with personal settings switched off",
   codex: "on an isolated Codex runtime (CODEX_HOME per role)",
   pi: "on an isolated Pi runtime (PI_CODING_AGENT_DIR per role)",
   opencode: "on an isolated OpenCode runtime (OPENCODE_CONFIG_DIR per role)",
+  devin: "on the user's Devin sign-in, guarded through its permission requests",
+  grok: "on the user's Grok sign-in, guarded through its permission requests",
 };
 
 /** A JSON file the plugin ships; a missing one is an error. */
@@ -229,10 +240,18 @@ async function providerFor(id: string, context: ProviderContext): Promise<Provid
   const { roomHome, policy, tools, restrictModels, used, catalogOf, warnings } = context;
   const { harness, role } = parseSeat(id)!;
   const allow = tools.allow[role] ?? [];
-  const launch = policy[harness].launch as { env: Record<string, string>; extraArgs?: Record<string, string | null> };
+  const launch = policy[harness].launch as {
+    env: Record<string, string>;
+    extraArgs?: Record<string, string | null>;
+    command?: string[];
+  };
   const runtime = join(roomHome, "runtimes", harness, role);
+  // Paseo extends only builtin providers and "acp": an ACP seat's provider carries its own launch command
+  const acp = ACP_HARNESSES.has(harness);
+  if (acp && !launch.command?.length)
+    throw new Error(`policy.json: ${harness}.launch.command must name the ACP command this harness launches`);
   const entry: ProviderEntry = {
-    extends: harness,
+    extends: acp ? "acp" : harness,
     label: `${LABEL[harness]} ${traits(role).profile}`,
     description: `${traits(role).profile} seat ${ISOLATION[harness]}; Paseo tools: ${allow.join(", ") || "none"}`,
     paseoTools: { enabled: true, disabledTools: tools.all.filter((tool) => !allow.includes(tool)) },
@@ -240,12 +259,22 @@ async function providerFor(id: string, context: ProviderContext): Promise<Provid
     env: Object.fromEntries(
       Object.entries(launch.env).map(([name, value]) => [name, value.replaceAll("{runtime}", runtime)]),
     ),
+    ...(acp ? { command: launch.command } : {}),
   };
   if (launch.extraArgs && Object.keys(launch.extraArgs).length) entry.options = { extraArgs: launch.extraArgs };
   if (harness === "claude") {
     const deniedSkills = ((policy.claude.deniedSkills ?? []) as string[]).map((name) => `Skill(skill:${name})`);
-    // Claude's own Read, Grep and Glob meet the secrets here; its shell meets them at the guard
-    const secrets = secretsOf(PASEO_HOME, roomHome).map((s) => `Read(/${s}${s.endsWith("/") ? "**" : ""})`);
+    // Claude's own Read, Grep and Glob meet the secrets here; its shell meets them at the guard. Each
+    // secret goes in the gate's spelling and the OS's own, since the rules' matcher reads native paths.
+    const secrets = [
+      ...new Set(
+        secretsOf(PASEO_HOME, roomHome).flatMap((s) =>
+          [s, fromGatePath(s)].map(
+            (spelled) => `Read(/${spelled}${spelled.endsWith("/") || spelled.endsWith("\\") ? "**" : ""})`,
+          ),
+        ),
+      ),
+    ];
     entry.disallowedTools = [...claudeDisallowed(policy, role), ...deniedSkills, ...secrets];
   }
   // OpenCode 2 reads permissions from the session, so the policy's travel with the provider too

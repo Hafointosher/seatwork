@@ -78,6 +78,14 @@ interface ProjectTable {
   error: string | null;
 }
 
+/** The app's projects the room has not registered, beside its own, as the screen's add list wants them. */
+export async function knownProjects(list: ProjectList): Promise<{ name: string; root: string }[]> {
+  const taken = new Set((loadRegistry()?.projects ?? []).map((entry) => realOrSelf(entry.cwd)));
+  return (await appProjects(list))
+    .filter((project) => !taken.has(project.path))
+    .map((project) => ({ name: project.name, root: project.path }));
+}
+
 /** Every registered project with the model table of its own, if it has one. */
 export function projectTables(): ProjectTable[] {
   const providers = enabledProviders();

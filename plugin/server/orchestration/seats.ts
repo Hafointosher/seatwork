@@ -7,9 +7,12 @@ import { inRoom, isRole, RETIRED } from "../../shared/workflow";
 
 /** The seats of the room: a provider named `<harness>-<role>`, the room's prompts for them, and which of them this machine has. */
 
-export const HARNESSES = ["claude", "codex", "pi", "opencode"] as const;
+export const HARNESSES = ["claude", "codex", "pi", "opencode", "devin", "grok"] as const;
 
 export type Harness = (typeof HARNESSES)[number];
+
+/** The harnesses that run over ACP: they have no CLI hooks the room can lay, so its guard reads their permission requests instead. */
+export const ACP_HARNESSES: ReadonlySet<Harness> = new Set(["devin", "grok"]);
 
 export interface Seat {
   provider: string;
@@ -40,9 +43,9 @@ export function isRoomProvider(provider: string): boolean {
   );
 }
 
-/** A file's text, or null where there is none. */
+/** A prompt file's text, or null where there is none; a checkout's line endings never reach a seat's prompt. */
 function readIfExists(path: string): string | null {
-  return existsSync(path) ? readFileSync(path, "utf8") : null;
+  return existsSync(path) ? readFileSync(path, "utf8").replace(/\r\n/g, "\n") : null;
 }
 
 /** The seats the room has on this machine, read from the seats.json written when it was set up. */

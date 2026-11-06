@@ -1,6 +1,6 @@
 import { ROOM_HOME, shipSql } from "./support/room";
 import assert from "node:assert/strict";
-import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { traits } from "../shared/workflow";
@@ -659,9 +659,15 @@ test("scope sees every file a turn changed, a shell's edits included, by git", a
   mkdirSync(join(repo, "test"), { recursive: true });
   writeFileSync(join(repo, "test", "tést.js"), "3\n");
   const tree = await council.changedIn(seat.id);
+  // git spells the root its own way (forward slashes, long name where realpath may spell the 8.3 alias), so the two roots are compared by file identity
+  const sameDir = (a: string, b: string) => {
+    const [sa, sb] = [statSync(a), statSync(b)];
+    return sa.dev === sb.dev && sa.ino === sb.ino;
+  };
+  assert.ok(tree?.root && sameDir(tree.root, repo));
   assert.deepEqual(
-    [tree?.root, tree?.files.sort()],
-    [realpathSync(repo), ["README.md", "src/duration.js", "test/tést.js"]],
+    tree?.files.sort(),
+    ["README.md", "src/duration.js", "test/tést.js"],
     "a name git would quote is given as it is",
   );
   const found = await council.endOfTurn({

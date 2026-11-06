@@ -1,17 +1,8 @@
 import { createHash } from "node:crypto";
-import {
-  cpSync,
-  existsSync,
-  lstatSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmdirSync,
-  rmSync,
-} from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { ROOM_FOLDER, ROOM_HOME } from "../../paths";
+import { moveRename } from "../../win32";
 import { isInside, realOrSelf } from "../../orchestration/registry";
 
 const ROOM_FILES = new Set([
@@ -86,7 +77,7 @@ export function takeRoomFiles(root: string, into: string): ProjectFiles | null {
 /** A rename, or a copy and a removal when the project is on another volume than the room home. */
 function move(from: string, to: string): void {
   try {
-    renameSync(from, to);
+    moveRename(from, to);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
     cpSync(from, to, { recursive: true });

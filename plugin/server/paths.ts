@@ -1,10 +1,13 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { ROOM_PROJECT } from "../shared/workflow";
 
 /** Where the room keeps its files: under one room home (SEATWORK_ROOM_HOME overrides it), beside the harness homes it shares from. */
 
-export const USER_HOME = homedir();
+// `HOME` is honored only as a native absolute path — on Windows `os.homedir()` ignores it, and an MSYS `/c/...` HOME is no absolute path either
+const envHome = process.env.HOME?.trim();
+export const USER_HOME =
+  envHome && (process.platform === "win32" ? win32.isAbsolute(envHome) : envHome.startsWith("/")) ? envHome : homedir();
 export const ROOM_HOME = process.env.SEATWORK_ROOM_HOME?.trim() || join(USER_HOME, ".config", "seatwork");
 
 export const ROOM_DIR = join(ROOM_HOME, "room");

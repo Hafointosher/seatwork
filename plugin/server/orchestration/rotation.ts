@@ -134,7 +134,7 @@ export function successorPrompt(input: {
     "## The brief in force",
     input.brief ?? "(the room could not read it: ask your Owner for the brief before you edit)",
     "",
-    `## The handoff (kept at ${input.file})`,
+    `## The handoff (kept at ${input.file.replaceAll("\\", "/")})`,
     input.handoff,
     "",
     ...(input.verbatim?.text ? exactBlock(input.verbatim) : []),

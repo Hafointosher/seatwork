@@ -1,4 +1,14 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  rmdirSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 import type { PaseoApi } from "../api";
 import { paseoCli } from "../cli";
@@ -6,8 +16,9 @@ import { removeRoomProject } from "../room-project";
 import { readFileSwitches, removeWithSdk, restoreFileSwitches, type FileSwitches } from "./paseo-config";
 import { ownAgentTools } from "./plan";
 import { keptAt, roomFolders, takeRoomFiles, type ProjectFiles } from "./project-files";
-import { isSetUp, moveRoomHomeAside } from "./room-home";
+import { asideTarget, isSetUp, moveRoomHomeAside } from "./room-home";
 import { HARNESSES, parseSeat } from "../../orchestration/seats";
+import { realOrSelf } from "../../orchestration/registry";
 import { CLAUDE_HOME, PASEO_HOME, ROOM_HOME, USER_HOME } from "../../paths";
 import { ROOM_PROJECT } from "../../../shared/workflow";
 
@@ -157,9 +168,46 @@ async function deleteRecords(seats: readonly { id: string }[]): Promise<string[]
     : [];
 }
 
+/** Moves the room home aside; a seat's process can still hold the home as its cwd a beat after archive answers, so an EPERM/EBUSY gets another try each second for a while. A handle on the home itself outlives that (a watcher keeps one open, blocking the rename but nothing inside): then the home is copied aside and emptied, its shell left until the holder goes. */
+async function moveHomeAside(): Promise<{ movedTo: string; notes: string[] }> {
+  for (let left = 5; ; left -= 1) {
+    try {
+      return { movedTo: moveRoomHomeAside(ROOM_HOME), notes: [] };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (!code || !["EPERM", "EBUSY", "EACCES"].includes(code)) throw error;
+      if (left <= 1) break;
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  }
+  const notes: string[] = [];
+  const target = asideTarget(ROOM_HOME);
+  cpSync(ROOM_HOME, target, { recursive: true });
+  const stuck: string[] = [];
+  for (const name of readdirSync(ROOM_HOME))
+    try {
+      rmSync(join(ROOM_HOME, name), { recursive: true, force: true });
+    } catch {
+      stuck.push(name);
+    }
+  try {
+    rmdirSync(ROOM_HOME); // frees once the holder lets go; else the next setup reuses the shell
+  } catch {
+    notes.push(`${ROOM_HOME} is empty aside from what is still held; it can go once that lets it.`);
+  }
+  if (stuck.length) notes.push(`still held in the old room home: ${stuck.join(", ")}`);
+  return { movedTo: target, notes };
+}
+
 /** Takes the room out of Paseo and moves its files aside with its archived seats' Claude sessions, as Remove does; `records` also deletes those seats' records, a call each. */
 export async function takeRoomOut(paseo: PaseoApi, records: boolean): Promise<Left> {
   const folders = roomFolders(); // read from the room home, before it moves
+  // a registered project always held a .seatwork: its list is read now, before the home goes too
+  const registered = new Set(
+    (readRoomFile<{ projects?: { cwd?: unknown }[] }>("projects.json")?.projects ?? [])
+      .map((project) => (typeof project.cwd === "string" ? realOrSelf(project.cwd) : null))
+      .filter((cwd): cwd is string => typeof cwd === "string"),
+  );
   // read before the room's project goes: deleting it drops the records of the seats it held
   const archived = await archivedSeats(paseo);
   const { removed } = await removeWithSdk(paseo);
@@ -178,12 +226,19 @@ export async function takeRoomOut(paseo: PaseoApi, records: boolean): Promise<Le
     notes.push(
       `The ${ROOM_PROJECT} project is still in Paseo's list, empty: the paseo CLI could not delete it. Delete it there.`,
     );
-  const movedTo = moveRoomHomeAside(ROOM_HOME);
+  const { movedTo, notes: held } = await moveHomeAside();
+  notes.push(...held);
   const projects: ProjectFiles[] = [];
   for (const root of folders) {
     try {
       const taken = takeRoomFiles(root, keptAt(movedTo, root));
       if (taken) projects.push(taken);
+      else if (registered.has(root))
+        notes.push(
+          existsSync(root)
+            ? `${root}/.seatwork is not there: nothing of the room's was collected from that project.`
+            : `${root} is gone: its .seatwork went with it and could not be collected.`,
+        );
     } catch (error) {
       notes.push(`${root}/.seatwork could not be moved: ${error instanceof Error ? error.message : String(error)}`);
     }

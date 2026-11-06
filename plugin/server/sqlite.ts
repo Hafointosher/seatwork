@@ -32,6 +32,15 @@ export function storeStats(): StoreStat[] {
   return [...OPEN].map((store) => store.stat());
 }
 
+/** Closes every store this process holds open: on Windows an open file's folder cannot move, so a process that removes a store's folder lets it go first. */
+export function closeAllStores(): void {
+  for (const store of [...OPEN]) {
+    try {
+      store.close();
+    } catch {}
+  }
+}
+
 /** One step of a store's layout, read from its file. */
 interface Script {
   version: number;

@@ -2,7 +2,7 @@ import { runGit } from "../git";
 import { NOT_ROOM_FOLDER } from "../paths";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import table from "../../shared/safety/handin.json";
 import { ASSERTION, gamingOf, type GamingEvidence, type GamingFile } from "./council/gaming";
 import { narrowingOf, type NarrowingEvidence } from "./council/narrowing";
@@ -74,6 +74,7 @@ interface Rule {
 interface Change {
   path: string;
   file: string;
+  root: string;
   added: [number, string][];
   removed: string[];
   deleted: boolean;
@@ -141,11 +142,21 @@ async function git(args: string[], cwd: string): Promise<{ ok: boolean; out: str
   return { ok: ran.code === 0, out: ran.out };
 }
 
-/** A regular file small enough to read, as its text and size; null for a link, a device, a folder, a big file or one unreadable. */
-function readFile(path: string): { text: string; size: number } | null {
+/** Whether the real path of `file` stays under the real path of `root`: a linked folder in between (a junction asks no privilege on Windows) would read outside the tree while every lstat on the way reports plain entries. */
+function staysUnder(file: string, root: string): boolean {
+  try {
+    const rel = relative(realpathSync.native(root), realpathSync.native(file));
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  } catch {
+    return false;
+  }
+}
+
+/** A regular file small enough to read under its work tree's root, as its text and size; null for a link, a device, a folder, a big file or one unreadable. */
+function readFile(path: string, root: string): { text: string; size: number } | null {
   try {
     const stat = lstatSync(path);
-    if (!stat.isFile() || stat.size > MAX_FILE) return null;
+    if (!stat.isFile() || stat.size > MAX_FILE || !staysUnder(path, root)) return null;
     return { text: readFileSync(path, "utf8"), size: stat.size };
   } catch {
     return null;
@@ -154,7 +165,7 @@ function readFile(path: string): { text: string; size: number } | null {
 
 /** A change's file text, read once per pass; an untracked file brought its own, and "" stands for one that cannot be read. */
 function textOf(change: Change): string {
-  return (change.text ??= readFile(change.file)?.text ?? "");
+  return (change.text ??= readFile(change.file, change.root)?.text ?? "");
 }
 
 /** The tracked files' added and removed lines out of a unified diff with no context lines; git names them from the work tree's top, `root`, and a path it still quotes is dropped with its lines. */
@@ -168,7 +179,7 @@ function parseDiff(diff: string, root: string): Map<string, Change> {
       const path = DIFF_HEADER.exec(raw)?.[2];
       current =
         path && !SKIP.some((p) => p.test(path))
-          ? { path, file: join(root, path), added: [], removed: [], deleted: false }
+          ? { path, file: join(root, path), root, added: [], removed: [], deleted: false }
           : null;
       if (current) changes.set(current.path, current);
       inHunk = false;
@@ -217,7 +228,7 @@ export async function changesSince(cwd: string, head: string): Promise<Change[] 
   let bytes = diff.out.length;
   for (const path of fresh) {
     const file = join(root, path);
-    const read = readFile(file);
+    const read = readFile(file, root);
     if (!read) continue;
     bytes += read.size;
     if (bytes > MAX_BYTES) return `more than ${MAX_BYTES >> 20} MB changed`;
@@ -225,6 +236,7 @@ export async function changesSince(cwd: string, head: string): Promise<Change[] 
     changes.set(path, {
       path,
       file,
+      root,
       added: lines.map((l, i) => [i + 1, l]),
       removed: [],
       deleted: false,
@@ -350,7 +362,10 @@ async function workTreeOf(cwd: string, hint: HandInHint): Promise<string> {
   const holds = new Map<string, number>();
   for (const path of (hint.paths ?? []).map(realOf)) {
     const tree = trees
-      .filter((one) => path === one.path || path.startsWith(`${one.path}/`))
+      .filter((one) => {
+        const treePath = realOf(one.path);
+        return path === treePath || path.startsWith(`${treePath}${sep}`);
+      })
       .sort((a, b) => b.path.length - a.path.length)[0];
     if (tree) holds.set(tree.path, (holds.get(tree.path) ?? 0) + 1);
   }

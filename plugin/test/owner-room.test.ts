@@ -11,7 +11,7 @@ const { call, context, seat } = pluginRoom(["claude-supervisor", "claude-lead", 
 
 test("a seat's command a grave rule holds for runs and is kept, nothing waits on the person, and the app is told the room's seats", async () => {
   const peer = await seat("peer-kept", "claude-peer", null, "[Peer] kept", PROJECT);
-  const command = `echo x > ${join(ROOM_HOME, "policy.json")}`;
+  const command = `echo x > ${join(ROOM_HOME, "policy.json").replace(/\\/g, "/")}`;
   assert.equal(await peer.hook("Bash", { command }), "", "the command runs");
 
   const db = new DatabaseSync(join(SAFETY_DIR, "safety.db"), { readOnly: true });

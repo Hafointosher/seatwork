@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { DEV_NULL } from "./win32";
 
 /** Flags and environment for git in a seat's work tree: no monitor, hook, external diff, user config, or filter and diff driver the repository names may run here. */
 
@@ -12,7 +13,7 @@ export const GIT_SAFE_ARGS: readonly string[] = [
   "-c",
   "core.fsmonitor=false",
   "-c",
-  "core.hooksPath=/dev/null",
+  `core.hooksPath=${DEV_NULL}`,
   "-c",
   "core.untrackedCache=false",
   "-c",
@@ -22,7 +23,7 @@ export const GIT_SAFE_ARGS: readonly string[] = [
 export const GIT_SAFE_ENV: NodeJS.ProcessEnv = {
   ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith("GIT_CONFIG_"))),
   GIT_CONFIG_NOSYSTEM: "1",
-  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_GLOBAL: DEV_NULL,
   GIT_TERMINAL_PROMPT: "0",
   GIT_ATTR_SOURCE: EMPTY_TREE,
 };

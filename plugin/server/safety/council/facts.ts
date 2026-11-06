@@ -1,5 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
-import { isAbsolute, matchesGlob, relative, resolve } from "node:path";
+import { isAbsolute, matchesGlob, posix, relative, resolve } from "node:path";
+import { toGatePath } from "../../win32";
 import council from "../../../shared/safety/council.json";
 import type { TurnEvent } from "../../host";
 
@@ -270,9 +271,13 @@ export function turnFacts(events: readonly TurnEvent[], named: readonly string[]
 /** The changed paths no glob of the write scope covers; relative globs are read from `root`, and a `*` covers a name that starts with a dot. */
 export function outsideScope(paths: readonly string[], globs: readonly string[], root: string): string[] {
   if (globs.length === 0) return [];
-  const local = globs.map((glob) => (isAbsolute(glob) ? relative(root, glob) : glob.replace(/^\.\//, "")));
+  const gateRoot = toGatePath(root);
+  const local = globs.map((glob) => {
+    const gate = toGatePath(glob);
+    return posix.isAbsolute(gate) ? posix.relative(gateRoot, gate) : glob.replace(/^\.\//, "");
+  });
   return paths.filter((path) => {
-    const inside = relative(root, resolve(root, path));
+    const inside = posix.relative(gateRoot, posix.resolve(gateRoot, toGatePath(path)));
     if (inside === ".." || inside.startsWith("../")) return true;
     return !local.some(
       (glob) => covers(inside, glob) || covers(inside, `${glob.replace(/\/$/, "")}/**`) || inside === glob,

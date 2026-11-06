@@ -43,7 +43,7 @@ test(
     const { dir, git, store, gate } = committed("MARKER\n");
     const marker = join(dir, "MARKER");
     writeFileSync(join(dir, ".gitattributes"), "* filter=trap\n");
-    git("config", "filter.trap.clean", `sh -c 'echo ran > ${marker}; cat'`);
+    git("config", "filter.trap.clean", `sh -c 'echo ran > ${marker.replace(/\\/g, "/")}; cat'`);
     writeFileSync(join(dir, "a.txt"), "two, longer than before\n");
     git("diff", "HEAD", "--stat");
     assert.equal(existsSync(marker), true, "the trap works: plain git runs the filter");

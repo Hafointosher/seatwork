@@ -211,8 +211,11 @@ export class MailEngine implements Directory {
     return root ? join(root, MAIL_DIR) : ROOM_MAIL;
   }
 
-  /** The store of a folder, opened once; null where none exists and `create` is off. A lost or damaged one is read back from the files. */
+  private closed = false;
+
+  /** The store of a folder, opened once; null where none exists and `create` is off or the engine is closed. A lost or damaged one is read back from the files. */
   private open(dir: string, create: boolean): MailStore | null {
+    if (this.closed) return null;
     const known = this.stores.get(dir);
     if (known) return known;
     // a folder that holds mail files and no store lost its store: opening it reads the files back
@@ -290,7 +293,7 @@ export class MailEngine implements Directory {
         ...owes.filter((ask) => ask.thread === thread).map((ask) => `it owes an answer to #${ask.id}`),
         ...awaits.filter((ask) => ask.thread === thread).map((ask) => `it waits for the answer to #${ask.id}`),
       ];
-      return `- ${thread}: ${count} mail${count === 1 ? "" : "s"}, the last #${last.id} "${last.subject}" from ${this.label(last.sender, seat)}${open.length ? `; ${open.join("; ")}` : ""}. The thread: ${threadFile(this.folderOf(seat), thread)}`;
+      return `- ${thread}: ${count} mail${count === 1 ? "" : "s"}, the last #${last.id} "${last.subject}" from ${this.label(last.sender, seat)}${open.length ? `; ${open.join("; ")}` : ""}. The thread: ${threadFile(this.folderOf(seat), thread)?.replaceAll("\\", "/") ?? null}`;
     });
   }
 
@@ -363,8 +366,9 @@ export class MailEngine implements Directory {
       }
   }
 
-  /** Closes every open store; a later call opens it again. */
+  /** Closes every open store; a closed engine opens none. */
   close(): void {
+    this.closed = true;
     for (const store of this.stores.values()) store.close();
     this.stores.clear();
   }

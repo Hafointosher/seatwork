@@ -27,6 +27,8 @@ import { Chair, type ChairDeps } from "./council/chair";
 import { acceptanceOf, Council, type Decider, type HandInDiff, type VerdictWork } from "./council/council";
 import { snapshot } from "./council/git";
 import { answerHook, claudePlugin, GATE_ENV, type Cli } from "./hooks";
+import { answerAcpRequest, type AcpRequest } from "./acp";
+import { toGatePath } from "../win32";
 import type { TurnEvent } from "../host";
 import { databaseIn, SafetyStore } from "./store";
 import { machineTools, worktreesOf } from "./system";
@@ -96,16 +98,17 @@ export class Safety {
     return this.deps.policy()?.mode !== "off";
   }
 
-  /** The district's store, opened on first use. */
+  /** The district's store, opened on first use; a closed district takes no write, so a call that outlived it fails instead of holding the file open. */
   store(): SafetyStore {
+    if (this.closed) throw new Error("seatwork: the guard is closed");
     if (!this.storeHandle) this.storeHandle = new SafetyStore(this.deps.dir, BUSY_MS);
     return this.storeHandle;
   }
 
   /** Lays down Claude's plugin folder; idempotent. */
   install(): void {
-    for (const [path, text] of Object.entries(claudePlugin()))
-      writeIfChanged(join(this.deps.dir, "claude", path), text, 0o600);
+    const dir = join(this.deps.dir, "claude");
+    for (const [path, text] of Object.entries(claudePlugin(dir))) writeIfChanged(join(dir, path), text, 0o600);
   }
 
   /** The env a seat's session opens with, guard on or off: its hooks find the room by it. */
@@ -124,6 +127,18 @@ export class Safety {
     const answered = await answerHook(this.guard, cli, body, agentId ? this.seatRef(agentId) : null, note);
     if (answered.wrote && agentId) this.council.wrote(agentId, answered.wrote);
     return answered;
+  }
+
+  /** An ACP seat's permission request, read by the guard as a hook's would be; null leaves it for the seat's Owner to answer. */
+  async answerAcp(
+    agentId: string,
+    cli: string,
+    request: AcpRequest,
+  ): Promise<{ allow: true } | { allow: false; message: string } | null> {
+    if (!this.on) return { allow: true };
+    const answered = await answerAcpRequest(this.guard, this.seatRef(agentId), cli, request);
+    if (answered.wrote && agentId) this.council.wrote(agentId, answered.wrote);
+    return answered.answer;
   }
 
   /** A new seat: where it starts, and the commit its hand-ins are read from. */
@@ -407,7 +422,10 @@ export class Safety {
     return this.existing() ? this.council.expire() : 0;
   }
 
+  private closed = false;
+
   close(): void {
+    this.closed = true;
     this.storeHandle?.close();
     this.storeHandle = null;
   }
@@ -426,9 +444,9 @@ export class Safety {
     return diff;
   }
 
-  /** The store when the room has one; a look or a sweep never makes an empty one. */
+  /** The store when the room has one; a look or a sweep never makes an empty one, and a closed district opens none. */
   private existing(): SafetyStore | null {
-    return this.storeHandle ?? (existsSync(databaseIn(this.deps.dir)) ? this.store() : null);
+    return this.storeHandle ?? (this.closed ? null : existsSync(databaseIn(this.deps.dir)) ? this.store() : null);
   }
 
   /** The commit the room first saw a repository at; null before the room has a store. */
@@ -458,13 +476,21 @@ export class Safety {
   }
 
   private placeOf(seat: SeatRef | null): Place {
+    const guard = this.deps.guard;
     return {
-      home: this.deps.userHome,
-      project: seat?.project ?? null,
-      tmp: seat?.tmp ?? null,
-      start: seat?.start ?? null,
-      trees: worktreesOf(seat?.project ?? null),
-      guard: this.deps.guard,
+      home: toGatePath(this.deps.userHome),
+      project: seat?.project ? toGatePath(seat.project) : null,
+      tmp: seat?.tmp ? toGatePath(seat.tmp) : null,
+      start: seat?.start ? toGatePath(seat.start) : null,
+      trees: worktreesOf(seat?.project ?? null).map(toGatePath),
+      guard: guard
+        ? {
+            ...guard,
+            paths: guard.paths.map(toGatePath),
+            except: guard.except.map(toGatePath),
+            copies: guard.copies?.map(toGatePath),
+          }
+        : null,
       roomFolder: this.deps.roomFolder,
       daemon: this.deps.daemon,
     };

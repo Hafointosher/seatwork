@@ -64,10 +64,10 @@ test("text that only looks near a secret is kept as it was", () => {
 
 test("text built to make a pattern backtrack is redacted in linear time: four times the text, not sixteen times the work", async () => {
   for (const [unit, size, prefix] of [
-    ["a.", 5000, ""],
-    ["word-", 2000, ""],
-    ["A", 10_000, ""],
-    ["a.", 5000, "http://"],
+    ["a.", 100_000, ""],
+    ["word-", 40_000, ""],
+    ["A", 200_000, ""],
+    ["a.", 100_000, "http://"],
   ] as const) {
     const [few, many] = [size, size * 4].map((count) => `${prefix}${unit.repeat(count)}`);
     const [small, large] = await fastestInTurns(

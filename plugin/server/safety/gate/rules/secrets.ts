@@ -1,5 +1,6 @@
 import { posix } from "node:path";
 import table from "../../../../shared/safety/places.json";
+import { toGatePath } from "../../../win32";
 import { within } from "../paths";
 
 /** The keys the daemon and the room hold, which no seat reads: with them a program is the daemon's owner or spends the room's keys. */
@@ -9,11 +10,11 @@ const FOLDER_READERS = new Set(["rg", "ag", "ack", "tar", "zip", "rsync", "scp",
 const COPIES = new Set(["cp", "rsync", "scp", "ditto"]);
 let spelled: { key: string; re: RegExp } | null = null;
 
-/** A machine's secrets: the daemon's files in its home and the room's key folders, each folder ending in "/". */
+/** A machine's secrets, each spelled in the gate's path form so a command's paths meet them: the daemon's files in its home and the room's key folders, each folder ending in "/". */
 export function secretsOf(paseoHome: string, roomHome: string): string[] {
   return [
-    ...table.secrets.paseoHome.map((name) => posix.join(paseoHome, name)),
-    ...table.secrets.roomHome.map((name) => `${posix.join(roomHome, name)}/`),
+    ...table.secrets.paseoHome.map((name) => posix.join(toGatePath(paseoHome), name)),
+    ...table.secrets.roomHome.map((name) => `${posix.join(toGatePath(roomHome), name)}/`),
   ];
 }
 

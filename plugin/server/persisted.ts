@@ -1,4 +1,5 @@
-import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { moveRename } from "./win32";
 
 /** A JSON file the room keeps across restarts: unreadable or absent, it starts as `empty`. */
 export function readJson<T>(file: string, empty: T): T {
@@ -12,5 +13,5 @@ export function readJson<T>(file: string, empty: T): T {
 /** Writes the whole file by a rename: a reader sees the old one or the new one. */
 export function writeJson(file: string, value: unknown, mode?: number): void {
   writeFileSync(`${file}.tmp`, `${JSON.stringify(value, null, 1)}\n`, mode === undefined ? {} : { mode });
-  renameSync(`${file}.tmp`, file);
+  moveRename(`${file}.tmp`, file);
 }

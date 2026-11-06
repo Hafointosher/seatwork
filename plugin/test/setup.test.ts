@@ -8,6 +8,7 @@ import { PASEO_HOME } from "../server/paths";
 import { loadPolicy } from "../server/policy";
 import { envFor } from "../server/orchestration/runtimes";
 import { parseSeat } from "../server/orchestration/seats";
+import { toGatePath } from "../server/win32";
 import { addSeats, setUpRoom } from "../server/paseo/setup/init";
 import { applyWithSdk } from "../server/paseo/setup/paseo-config";
 import { planRoom, roomModels, type Catalog, type Setup } from "../server/paseo/setup/plan";
@@ -56,6 +57,8 @@ test("the provider written for a seat starts it as the plugin does: the same env
   assert.deepEqual([...new Set(Object.keys(providers).map((id) => parseSeat(id)!.harness))].sort(), [
     "claude",
     "codex",
+    "devin",
+    "grok",
     "opencode",
     "pi",
   ]);
@@ -65,8 +68,9 @@ test("the provider written for a seat starts it as the plugin does: the same env
     assert.deepEqual(provider.options?.extraArgs, policy.launch[seat.harness].extraArgs, id);
     if (seat.harness === "claude")
       for (const denied of [
-        `Read(/${PASEO_HOME}/local-credential)`,
-        `Read(/${ROOM_HOME}/jev/**)`,
+        `Read(/${toGatePath(PASEO_HOME)}/local-credential)`,
+        `Read(/${toGatePath(ROOM_HOME)}/jev/**)`,
+        `Read(/${join(PASEO_HOME, "local-credential")})`,
         "Skill(skill:design)",
       ])
         assert.ok(provider.disallowedTools?.includes(denied), `${id} denies ${denied}`);
@@ -95,7 +99,11 @@ test("a role's seat and profile follow the model this machine chose for it", asy
 
   // choosing a model for a role is what sets its seat up
   assert.ok("opencode-hq" in providers && "pi-supervisor" in providers);
-  assert.deepEqual(models.seats.hq, { provider: "opencode-hq/vendor/m-two", thinking: "default" });
+  assert.deepEqual(models.seats.hq, {
+    provider: "opencode-hq/vendor/m-two",
+    thinking: "default",
+    alternatives: ["devin-hq/swe-2-high", "grok-hq/grok-4.7"],
+  });
   // a model without thinking options and a harness without session modes take no such setting
   assert.deepEqual(profile("agent_profile_seatwork_hq"), {
     provider: "opencode-hq",

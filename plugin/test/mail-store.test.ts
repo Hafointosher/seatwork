@@ -8,10 +8,13 @@ import { DatabaseSync } from "node:sqlite";
 import config from "../shared/mail.json";
 import { readSettled } from "../server/coordination/archive";
 import { MailStore, type NewMessage } from "../server/coordination/store";
-import { StoreError } from "../server/sqlite";
+import { closeAllStores, StoreError } from "../server/sqlite";
 
 const base = mkdtempSync(join(tmpdir(), "seatwork-mail-store-"));
-process.on("exit", () => rmSync(base, { recursive: true, force: true }));
+process.on("exit", () => {
+  closeAllStores();
+  rmSync(base, { recursive: true, force: true });
+});
 
 shipSql();
 

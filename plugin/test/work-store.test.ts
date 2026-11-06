@@ -2,7 +2,16 @@ import { ROOM_HOME, shipSql } from "./support/room";
 import { fastestInTurns } from "./support/timing";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
@@ -392,7 +401,12 @@ test(
     store.create({ title: "schema" }, "lead");
     store.close();
     const file = join(dir, "work.db");
-    chmodSync(file, 0o000);
+    const real = `${file}.real`;
+    // a file Windows cannot open that asks no privilege: a folder in its place
+    if (process.platform === "win32") {
+      renameSync(file, real);
+      mkdirSync(file);
+    } else chmodSync(file, 0o000);
     try {
       assert.throws(() => new WorkStore(dir, TIMING));
       assert.deepEqual(
@@ -400,7 +414,10 @@ test(
         [],
       );
     } finally {
-      chmodSync(file, 0o644);
+      if (process.platform === "win32") {
+        rmSync(file, { recursive: true });
+        renameSync(real, file);
+      } else chmodSync(file, 0o644);
     }
     assert.equal(new WorkStore(dir, TIMING).count(), 1);
   },

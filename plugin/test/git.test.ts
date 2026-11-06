@@ -1,20 +1,44 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { GIT_ENV } from "./support/git";
+import { findOnPath } from "../server/win32";
+import { delimiter } from "node:path";
 
 // a git first on the path that logs each call, set before the module under test reads the environment
-const REAL = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+const REAL =
+  process.platform === "win32" ? findOnPath("git")! : execFileSync("which", ["git"], { encoding: "utf8" }).trim();
 const base = mkdtempSync(join(tmpdir(), "holes-git-"));
-process.on("exit", () => rmSync(base, { recursive: true, force: true }));
+process.on("exit", () => rmSync(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }));
 mkdirSync(join(base, "bin"));
 const log = join(base, "calls.log");
-writeFileSync(join(base, "bin", "git"), `#!/bin/sh\necho "$*" >> "${log}"\nexec ${REAL} "$@"\n`);
-chmodSync(join(base, "bin", "git"), 0o755);
-process.env.PATH = `${join(base, "bin")}:${process.env.PATH}`;
+if (process.platform === "win32") {
+  // execFile finds only .exe here, so the room's git is counted in-process instead of by a PATH shim
+  const cp = require("node:child_process") as typeof import("node:child_process");
+  const real = cp.execFile;
+  (cp as { execFile: unknown }).execFile = ((file: string, args: unknown, ...rest: unknown[]) => {
+    if (typeof file === "string" && /(^|[\\/])git(\.exe)?$/i.test(file))
+      appendFileSync(log, `${Array.isArray(args) ? args.join(" ") : ""}\n`);
+    return (real as (...a: unknown[]) => unknown)(file, args, ...rest);
+  }) as typeof cp.execFile;
+} else {
+  const shim = join(base, "bin", "git");
+  writeFileSync(shim, `#!/bin/sh\necho "$*" >> "${log}"\nexec ${REAL} "$@"\n`);
+  chmodSync(shim, 0o755);
+  process.env.PATH = `${join(base, "bin")}${delimiter}${process.env.PATH}`;
+}
 const { runGit } = require("../server/git") as typeof import("../server/git");
 
 const LIMITS = { timeoutMs: 10_000, maxBytes: 1 << 20 };
@@ -37,7 +61,7 @@ function repo() {
   writeFileSync(join(dir, "a.txt"), "two, longer than before\n");
   writeFileSync(join(dir, "b.bin"), "two, longer than before\n");
   const marker = join(dir, "..", `marker-${repos}`);
-  const program = `sh -c 'echo ran >> ${marker}; cat'`;
+  const program = `sh -c 'echo ran >> ${marker.replace(/\\/g, "/")}; cat'`;
   return {
     dir,
     git,

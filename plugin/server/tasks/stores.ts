@@ -24,8 +24,9 @@ export class WorkStores {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
-  /** A project's store and the rules in force there. */
+  /** A project's store and the rules in force there; closed stores take no write. */
   of(root: string): { store: WorkStore; rules: WorkPolicy } {
+    if (this.closed) throw new Error("seatwork: the work stores are closed");
     const rules = projectPolicy(root, this.policy);
     let store = this.open.get(root);
     if (!store) {
@@ -36,9 +37,9 @@ export class WorkStores {
     return { store, rules };
   }
 
-  /** A project's store when it has one already; null when it has none yet. */
+  /** A project's store when it has one already; null when it has none yet or the stores are closed. */
   existing(root: string | null): WorkStore | null {
-    if (!root || !existsSync(join(root, WORK_DIR, "work.db"))) return null;
+    if (this.closed || !root || !existsSync(join(root, WORK_DIR, "work.db"))) return null;
     return this.of(root).store;
   }
 
@@ -88,7 +89,10 @@ export class WorkStores {
 
   /** Closes every store. */
   close(): void {
+    this.closed = true;
     for (const store of this.open.values()) store.close();
     this.open.clear();
   }
+
+  private closed = false;
 }

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { REGISTRY_FILE, ROOM_FOLDER, ROOM_PROJECT_DIR } from "../paths";
 import { inRoom, ROOM_PROJECT } from "../../shared/workflow";
 
@@ -49,10 +49,10 @@ function readProjectFiles(root: string, name: string): ProjectFiles {
   };
 }
 
-/** The real path of a folder, or its absolute path where it does not exist. */
+/** The real path of a folder, or its absolute path where it does not exist; native canonicalizes 8.3 names, so a git file's spelling and the owner's compare equal. */
 export function realOrSelf(path: string): string {
   try {
-    return realpathSync(path);
+    return realpathSync.native(path);
   } catch {
     return resolve(path);
   }
@@ -82,9 +82,11 @@ export function writeRegistryFile(content: Record<string, unknown>): void {
   renameSync(`${REGISTRY_FILE}.tmp`, REGISTRY_FILE);
 }
 
-/** Whether `child` is `parent` or lies inside it. */
+/** Whether `child` is `parent` or lies inside it; `relative` reads separators and case as the platform's filesystem does. */
 export function isInside(child: string, parent: string): boolean {
-  return child === parent || child.startsWith(parent.endsWith("/") ? parent : `${parent}/`);
+  if (!parent) return false;
+  const rel = relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 /** Where the room's own seats sit: `roomProject` in the registry, else the default. */
@@ -138,7 +140,7 @@ export function markerRoot(cwd: string): string | null {
 /** Walks up from cwd looking for a .seatwork/room.json, for open mode (no registry). */
 export function findRoomMarker(cwd: string): (ProjectFiles & { root: string }) | null {
   const root = markerRoot(cwd);
-  return root ? { root, ...readProjectFiles(root, root.split("/").pop() ?? root) } : null;
+  return root ? { root, ...readProjectFiles(root, basename(root)) } : null;
 }
 
 /** The same place in the main checkout of the linked git worktree a folder lies in; null for a folder in none. */

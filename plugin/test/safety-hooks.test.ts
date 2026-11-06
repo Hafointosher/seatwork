@@ -3,13 +3,32 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { request } from "node:http";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { McpHttpServer } from "../server/mcp-http";
-import { claudePlugin, codexHooks, GATE_ENV, openCodePlugin, piExtension, SKILLS_ENV } from "../server/safety/hooks";
+import {
+  claudePlugin,
+  codexHooks,
+  GATE_ENV,
+  GUARD_FILE,
+  guardScript,
+  openCodePlugin,
+  piExtension,
+  SKILLS_ENV,
+} from "../server/safety/hooks";
 
 const DIR = join(ROOM_HOME, "hooks-test");
+const CLAUDE_DIR = join(DIR, "claude");
+const CODEX_DIR = join(DIR, "codex");
 mkdirSync(DIR, { recursive: true });
+for (const [path, text] of Object.entries(claudePlugin(CLAUDE_DIR))) {
+  const file = join(CLAUDE_DIR, path);
+  mkdirSync(dirname(file), { recursive: true });
+  writeFileSync(file, text);
+}
+mkdirSync(CODEX_DIR, { recursive: true });
+writeFileSync(join(CODEX_DIR, "hooks.json"), codexHooks(CODEX_DIR));
+writeFileSync(join(CODEX_DIR, GUARD_FILE), guardScript());
 
 /** A room server whose guard answers as `answer` says; it returns the address the hooks call. */
 async function room(
@@ -22,13 +41,16 @@ async function room(
   return { url: server.routeUrl(bound, "gate"), port: bound, close: () => server.close() };
 }
 
-/** The hook each CLI runs, as its config declares it; Codex hands its command line to a shell. */
+/** The hook each CLI runs, as its config declares it; Codex hands its command line to the platform's shell. */
 function hookOf(cli: "claude" | "codex"): [string, string[]] {
   if (cli === "claude") {
-    const hook = JSON.parse(claudePlugin()["hooks/hooks.json"]).hooks.PreToolUse[0].hooks[0];
+    const hook = JSON.parse(claudePlugin(CLAUDE_DIR)["hooks/hooks.json"]).hooks.PreToolUse[0].hooks[0];
     return [hook.command, hook.args];
   }
-  return ["/bin/sh", ["-c", JSON.parse(codexHooks()).hooks.PreToolUse[0].hooks[0].command]];
+  const command = JSON.parse(codexHooks(CODEX_DIR)).hooks.PreToolUse[0].hooks[0].command;
+  return process.platform === "win32"
+    ? ["powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command]]
+    : ["/bin/sh", ["-c", command]];
 }
 
 /** Runs a CLI's hook as that CLI would: the payload on stdin, the seat's env set. */
@@ -39,7 +61,7 @@ function runHook(
 ): Promise<{ status: number | null; stdout: string }> {
   return new Promise((resolve) => {
     const [command, args] = hookOf(cli);
-    const child = spawn(command, args, { env: { PATH: process.env.PATH ?? "", ...env } });
+    const child = spawn(command, args, { env: { ...process.env, ...env } });
     let stdout = "";
     child.stdout.on("data", (chunk) => (stdout += chunk));
     child.on("close", (status) => resolve({ status, stdout }));
@@ -214,7 +236,7 @@ test("the room's server reads a letter split between two chunks whole, and a cli
 });
 
 test("after a compaction a Claude seat is told its skills again, each with its description, from its own folder", () => {
-  const [entry] = JSON.parse(claudePlugin()["hooks/hooks.json"]).hooks.SessionStart;
+  const [entry] = JSON.parse(claudePlugin(CLAUDE_DIR)["hooks/hooks.json"]).hooks.SessionStart;
   assert.equal(entry.matcher, "compact");
   const dir = join(ROOM_HOME, "compact-skills");
   for (const [name, about] of [

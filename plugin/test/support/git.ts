@@ -1,12 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DEV_NULL } from "../../server/win32";
 
 /** git as the tests run it: a fixed author and none of the user's own config, and repositories made of a few files. */
 
 export const GIT_ENV = {
   ...process.env,
-  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_GLOBAL: DEV_NULL,
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_AUTHOR_NAME: "t",
   GIT_AUTHOR_EMAIL: "t@t",

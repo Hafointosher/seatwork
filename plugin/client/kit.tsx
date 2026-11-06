@@ -23,6 +23,8 @@ export const CLI_COLOR: Record<string, string> = {
   codex: "#6FA8F5",
   pi: "#B08CF5",
   opencode: "#E0B84C",
+  devin: "#6366F1",
+  grok: "#10B981",
 };
 
 export const MONO = {

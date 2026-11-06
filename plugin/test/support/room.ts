@@ -1,5 +1,7 @@
 /** Test room support: the throwaway homes test/isolate.cjs made for this process (a run without it would reach the real ones), and the plugin folder whose room files and policy ship into them. */
-import { cpSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { cpSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import { PaseoHost } from "../../server/paseo/host";
 
@@ -40,11 +42,35 @@ export function hostOf(paseo: unknown): PaseoHost {
   return host;
 }
 
+/** Whether `path` grants nobody but the owner, SYSTEM, Administrators and owner rights — what `mode & 0o077 === 0` is on POSIX. On Windows the check reads the ACL through icacls, since stat's mode is made-up there. */
+export function aclPrivate(path: string): boolean {
+  if (process.platform !== "win32") return (statSync(path).mode & 0o077) === 0;
+  const allowed = new Set([
+    "nt authority\\system",
+    "builtin\\administrators",
+    "nt authority\\owner rights",
+    "owner rights",
+    "s-1-3-4",
+    "s-1-5-18",
+    "s-1-5-32-544",
+    userInfo().username.toLowerCase(),
+  ]);
+  return execFileSync("icacls", [path], { encoding: "utf8" })
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.includes(":("))
+    .map((line) => (line.toLowerCase().startsWith(path.toLowerCase()) ? line.slice(path.length).trim() : line))
+    .every((line) => {
+      const who = line.slice(0, line.indexOf(":(")).trim().toLowerCase();
+      return allowed.has(who) || allowed.has(who.split("\\").at(-1)!);
+    });
+}
+
 export const MAIL_POLICY = {
   port: 0,
   holdFyiWhileRunning: true,
   gatherReviews: true,
-  midTurn: { claude: "hold", codex: "hold", pi: "hold", opencode: "hold" },
+  midTurn: { claude: "hold", codex: "hold", pi: "hold", opencode: "hold", devin: "hold", grok: "hold" },
 } as const;
 
 export interface Deferred {

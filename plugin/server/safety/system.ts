@@ -9,10 +9,11 @@ import {
   statSync,
   type Stats,
 } from "node:fs";
-import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve, win32 } from "node:path";
 import { runGit } from "../git";
 import type { Rc, Tools } from "./gate/evaluate";
 import { CLAUDE_HOME } from "../paths";
+import { exeSpellings, fromGatePath, IS_WINDOWS, toGatePath } from "../win32";
 
 /** The guard's questions to the machine: git, a rebase under way, changed files. */
 
@@ -27,10 +28,12 @@ function git(args: string[], cwd: string | null): Promise<{ code: number; out: s
 
 /** The folder a path lies in that exists, to run git from. */
 function existingDir(path: string): string | null {
-  let dir = path;
-  for (let i = 0; i < 64 && dir !== "/"; i += 1) {
+  let dir = fromGatePath(path);
+  for (let i = 0; i < 64; i += 1) {
     if (existsSync(dir) && statSync(dir).isDirectory()) return dir;
-    dir = dirname(dir);
+    const up = dirname(dir);
+    if (up === dir) return null;
+    dir = up;
   }
   return null;
 }
@@ -193,32 +196,36 @@ export function machineTools(since: () => number | null, baseOf?: (commonDir: st
     async ignored(paths) {
       const dir = paths.length ? existingDir(dirname(paths[0])) : null;
       if (!dir) return new Set();
-      const done = await git(["check-ignore", "--", ...paths], dir);
+      const done = await git(["check-ignore", "--", ...paths.map(fromGatePath)], dir);
       return new Set(done.out.split("\n").filter(Boolean));
     },
     async alias(name, cwd) {
       const key = `${cwd ?? ""}\0${name}`;
       const known = aliases.get(key);
       if (known !== undefined) return known;
-      const done = await git(["config", "--get", `alias.${name}`], cwd && existsSync(cwd) ? cwd : null);
+      const at = cwd ? fromGatePath(cwd) : null;
+      const done = await git(["config", "--get", `alias.${name}`], at && existsSync(at) ? at : null);
       const value = done.code === 0 ? done.out.trim() : null;
       aliases.set(key, value);
       return value;
     },
     async external(name) {
+      const names = IS_WINDOWS ? exeSpellings(`git-${name}`) : [`git-${name}`];
       for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-        try {
-          accessSync(join(dir, `git-${name}`), constants.X_OK);
-          return true;
-        } catch {
-          continue;
+        for (const file of names) {
+          try {
+            accessSync(join(dir, file), constants.X_OK);
+            return true;
+          } catch {
+            continue;
+          }
         }
       }
       return false;
     },
     stat(path) {
       try {
-        const s = lstatSync(path);
+        const s = lstatSync(fromGatePath(path));
         return { exists: true, link: s.isSymbolicLink(), dir: s.isDirectory() };
       } catch {
         return { exists: false, link: false, dir: false };
@@ -227,29 +234,44 @@ export function machineTools(since: () => number | null, baseOf?: (commonDir: st
     rc: () => claudeRc(),
     folder(path) {
       try {
-        return statSync(path).isDirectory();
+        return statSync(fromGatePath(path)).isDirectory();
       } catch {
         return false;
       }
     },
     real(path) {
       try {
-        return realpathSync.native(path);
+        return toGatePath(realpathSync.native(fromGatePath(path)));
       } catch {
         return null;
       }
     },
     program(word, cwd, path) {
-      const spots = word.includes("/")
-        ? [isAbsolute(word) || cwd ? resolve(cwd ?? "/", word) : null]
+      const hasSep = word.includes("/") || (IS_WINDOWS && word.includes("\\"));
+      const names = !hasSep && IS_WINDOWS ? exeSpellings(word) : [word];
+      const dirOf = cwd ? fromGatePath(cwd) : null;
+      const spots = hasSep
+        ? [
+            isAbsolute(word) || (IS_WINDOWS && win32.isAbsolute(word)) || cwd
+              ? resolve(dirOf ?? "/", fromGatePath(word))
+              : null,
+          ]
         : (path ?? process.env.PATH ?? "")
             .split(delimiter)
-            .map((dir) => (isAbsolute(dir) ? join(dir, word) : cwd ? join(resolve(cwd, dir || "."), word) : null));
+            .flatMap((dir) =>
+              names.map((file) =>
+                isAbsolute(dir) || (IS_WINDOWS && win32.isAbsolute(dir))
+                  ? join(dir, file)
+                  : dirOf
+                    ? join(resolve(dirOf, dir || "."), file)
+                    : null,
+              ),
+            );
       for (const spot of spots) {
         if (!spot) continue;
         try {
           accessSync(spot, constants.X_OK);
-          return realpathSync.native(spot);
+          return toGatePath(realpathSync.native(spot));
         } catch {
           continue;
         }
@@ -258,21 +280,27 @@ export function machineTools(since: () => number | null, baseOf?: (commonDir: st
     },
     file(path) {
       try {
-        const s = statSync(path);
-        return s.isFile() && s.size <= MAX_SCRIPT ? readFileSync(path, "utf8") : null;
+        const native = fromGatePath(path);
+        const s = statSync(native);
+        return s.isFile() && s.size <= MAX_SCRIPT ? readFileSync(native, "utf8") : null;
       } catch {
         return null;
       }
     },
     async changed(path) {
       try {
-        const s = statSync(path);
+        const native = fromGatePath(path);
+        const s = statSync(native);
         if (!s.isFile() || s.size > MAX_SCRIPT) return null;
         const start = since();
         const written = start !== null && s.mtimeMs >= start;
-        if (!written && !(await differsFromCommit(path, s)) && !(baseOf && (await differsFromBase(path, s, baseOf))))
+        if (
+          !written &&
+          !(await differsFromCommit(native, s)) &&
+          !(baseOf && (await differsFromBase(native, s, baseOf)))
+        )
           return null;
-        return readFileSync(path, "utf8");
+        return readFileSync(native, "utf8");
       } catch {
         return null;
       }

@@ -52,28 +52,51 @@ export class StandInApp {
     mkdirSync(join(dir, "agents"), { recursive: true });
     rmSync(PASEO_SCHEDULES, { recursive: true, force: true });
     mkdirSync(PASEO_SCHEDULES, { recursive: true });
-    this.cli = join(dir, "paseo");
+    this.cli = join(dir, process.platform === "win32" ? "paseo.mjs" : "paseo");
     writeFileSync(join(dir, "stuck"), "");
     writeFileSync(
       this.cli,
-      [
-        "#!/bin/sh",
-        `d="${dir}"`,
-        'echo "$*" >> "$d/calls"',
-        'case "$1" in',
-        '  send) echo "$2" >> "$d/cli-sent"; cat "$4" > "$d/cli-text-$2" ;;',
-        '  agent) case "$2" in',
-        '    inspect) if [ -f "$d/agents/$3.json" ]; then cat "$d/agents/$3.json";',
-        '      else echo \'{"error":{"code":"AGENT_NOT_FOUND","message":"Agent not found"}}\' >&2; exit 1; fi ;;',
-        "    update|archive) ;;",
-        "    *) exit 1 ;;",
-        "  esac ;;",
-        '  schedule) if grep -qx "$3" "$d/stuck"; then echo "no such schedule" >&2; exit 1; fi',
-        `    rm -f "${PASEO_SCHEDULES}/$3.json" ;;`,
-        "  *) exit 1 ;;",
-        "esac",
-        "",
-      ].join("\n"),
+      process.platform === "win32"
+        ? [
+            'import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";',
+            `const d = ${JSON.stringify(dir)};`,
+            `const schedules = ${JSON.stringify(PASEO_SCHEDULES)};`,
+            "const [cmd, a1, a2, a3] = process.argv.slice(2);",
+            'appendFileSync(`${d}/calls`, `${process.argv.slice(2).join(" ")}\\n`);',
+            'if (cmd === "send") {',
+            "  appendFileSync(`${d}/cli-sent`, `${a1}\\n`);",
+            '  writeFileSync(`${d}/cli-text-${a1}`, readFileSync(a3, "utf8"));',
+            '} else if (cmd === "agent") {',
+            '  if (a1 === "inspect") {',
+            "    const f = `${d}/agents/${a2}.json`;",
+            '    if (existsSync(f)) process.stdout.write(readFileSync(f, "utf8"));',
+            '    else { console.error("{\\"error\\":{\\"code\\":\\"AGENT_NOT_FOUND\\",\\"message\\":\\"Agent not found\\"}}"); process.exit(1); }',
+            '  } else if (a1 !== "update" && a1 !== "archive") process.exit(1);',
+            '} else if (cmd === "schedule") {',
+            '  const stuck = readFileSync(`${d}/stuck`, "utf8").split(/\\r?\\n/).filter(Boolean);',
+            '  if (stuck.includes(a2)) { console.error("no such schedule"); process.exit(1); }',
+            "  rmSync(`${schedules}/${a2}.json`, { force: true });",
+            "} else process.exit(1);",
+            "",
+          ].join("\n")
+        : [
+            "#!/bin/sh",
+            `d="${dir}"`,
+            'echo "$*" >> "$d/calls"',
+            'case "$1" in',
+            '  send) echo "$2" >> "$d/cli-sent"; cat "$4" > "$d/cli-text-$2" ;;',
+            '  agent) case "$2" in',
+            '    inspect) if [ -f "$d/agents/$3.json" ]; then cat "$d/agents/$3.json";',
+            '      else echo \'{"error":{"code":"AGENT_NOT_FOUND","message":"Agent not found"}}\' >&2; exit 1; fi ;;',
+            "    update|archive) ;;",
+            "    *) exit 1 ;;",
+            "  esac ;;",
+            '  schedule) if grep -qx "$3" "$d/stuck"; then echo "no such schedule" >&2; exit 1; fi',
+            `    rm -f "${PASEO_SCHEDULES}/$3.json" ;;`,
+            "  *) exit 1 ;;",
+            "esac",
+            "",
+          ].join("\n"),
       { mode: 0o755 },
     );
   }

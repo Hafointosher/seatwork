@@ -398,25 +398,29 @@ test("a cd into a folder that is not there may leave the shell where it was, and
   assert.deepEqual(await hits("cd dist; rm -rf src", { folder: built }), []);
 });
 
-test("a command under another name is judged as the program its link runs, by path or on PATH", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "bin-"));
-  const cli = join(dir, "lib", "node_modules", "@getpaseo", "cli", "bin");
-  mkdirSync(cli, { recursive: true });
-  writeFileSync(join(cli, "paseo.js"), "", { mode: 0o755 });
-  symlinkSync("/bin/rm", join(dir, "del"));
-  symlinkSync(join(cli, "paseo.js"), join(dir, "p"));
-  const looked = { program: machineTools(() => null).program };
-  try {
-    assert.deepEqual(await hits(`PATH=${dir}:/usr/bin; del -rf ~`, looked), ["delete:system"]);
-    assert.deepEqual(await hits(`${dir}/del -rf ~`, looked), ["delete:system"]);
-    assert.deepEqual(await hits(`PATH=${dir}; p send agent hi`, looked), ["room:paseo-cli"]);
-    assert.deepEqual(await hits(`PATH=${dir}; del() { echo; }; del -rf ~`, looked), [], "a function comes first");
-    assert.deepEqual(await hits(`PATH=${dir}; ls -la`, looked), []);
-    assert.deepEqual(await hits(`PATH=${dir}; del -rf ~`), [], "without the lookup the name runs nothing known");
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+test(
+  "a command under another name is judged as the program its link runs, by path or on PATH",
+  { skip: process.platform === "win32" },
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bin-"));
+    const cli = join(dir, "lib", "node_modules", "@getpaseo", "cli", "bin");
+    mkdirSync(cli, { recursive: true });
+    writeFileSync(join(cli, "paseo.js"), "", { mode: 0o755 });
+    symlinkSync("/bin/rm", join(dir, "del"));
+    symlinkSync(join(cli, "paseo.js"), join(dir, "p"));
+    const looked = { program: machineTools(() => null).program };
+    try {
+      assert.deepEqual(await hits(`PATH=${dir}:/usr/bin; del -rf ~`, looked), ["delete:system"]);
+      assert.deepEqual(await hits(`${dir}/del -rf ~`, looked), ["delete:system"]);
+      assert.deepEqual(await hits(`PATH=${dir}; p send agent hi`, looked), ["room:paseo-cli"]);
+      assert.deepEqual(await hits(`PATH=${dir}; del() { echo; }; del -rf ~`, looked), [], "a function comes first");
+      assert.deepEqual(await hits(`PATH=${dir}; ls -la`, looked), []);
+      assert.deepEqual(await hits(`PATH=${dir}; del -rf ~`), [], "without the lookup the name runs nothing known");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);
 
 test("a daemon on a socket is reached by naming the socket, however its listen address spells it", async () => {
   for (const daemon of ["unix:///Users/u/.paseo/d.sock", "~/.paseo/d.sock"]) {

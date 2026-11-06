@@ -151,8 +151,9 @@ test("a script the seat wrote after it started is read before it runs, in a repo
   writeFileSync(join(dir, "clean.sh"), "echo hi\n");
   const check = (command: string) =>
     safety.guard.check({ id: "peer", role: "peer", project: null, tmp: null, start: null }, "claude", command, dir);
-  await check(`bash ${dir}/wipe.sh`);
-  await check(`bash ${dir}/clean.sh`);
+  const script = (name: string) => join(dir, name).replace(/\\/g, "/");
+  await check(`bash ${script("wipe.sh")}`);
+  await check(`bash ${script("clean.sh")}`);
   assert.deepEqual(keptRules(safety.store(), "peer"), ["delete:system"]);
 });
 

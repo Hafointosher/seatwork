@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { privateEntry } from "../win32";
 import { join } from "node:path";
 import { firstNotEnglish } from "../english";
 import { call } from "./client";
@@ -227,9 +228,10 @@ export class Jev {
     const name = this.deps.policy()?.provider;
     if (!name) throw new Error("no decision provider is set up in the policy");
     mkdirSync(this.deps.dir, { recursive: true, mode: 0o700 });
+    privateEntry(this.deps.dir, 0o700);
     const file = this.keyFile(name);
     writeFileSync(file, `${key.trim()}\n`, { mode: 0o600 });
-    chmodSync(file, 0o600);
+    privateEntry(file, 0o600);
     this.keys.delete(name);
   }
 
@@ -330,14 +332,19 @@ export class Jev {
     if (this.cache.size > CACHE.entries) this.cache.delete(this.cache.keys().next().value!);
   }
 
-  /** The log, opened on first use. */
+  /** The log, opened on first use; a closed district takes no write, so a call that outlived it fails instead of holding the file open. */
   store(): JevStore {
+    if (this.closed) throw new Error("seatwork: the decision log is closed");
     return (this.storeHandle ??= new JevStore(this.deps.dir, BUSY_MS, () => this.now()));
   }
 
-  /** The log when one exists: reading the district never makes its file. */
+  /** The log when one exists: reading the district never makes its file, and a closed district opens none. */
   private existing(): JevStore | null {
-    return this.storeHandle || existsSync(join(this.deps.dir, "decisions.db")) ? this.store() : null;
+    return this.closed
+      ? null
+      : this.storeHandle || existsSync(join(this.deps.dir, "decisions.db"))
+        ? this.store()
+        : null;
   }
 
   /** This month's spending, in USD. */
@@ -506,7 +513,10 @@ export class Jev {
 
   /** Closes the log. */
   close(): void {
+    this.closed = true;
     this.storeHandle?.close();
     this.storeHandle = null;
   }
+
+  private closed = false;
 }

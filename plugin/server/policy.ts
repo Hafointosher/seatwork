@@ -15,10 +15,11 @@ interface ClaudeRuntimePolicy {
   deniedSkills: string[];
 }
 
-/** How a harness's seats start: `{runtime}` in an env value is the seat's home; `extraArgs` are launch flags. */
+/** How a harness's seats start: `{runtime}` in an env value is the seat's home; `extraArgs` are launch flags; `command` is the ACP command, on the ACP harnesses only. */
 interface LaunchPolicy {
   env: Record<string, string>;
   extraArgs?: Record<string, string | null>;
+  command?: string[];
 }
 
 export interface CodexRuntimePolicy {
@@ -115,7 +116,7 @@ export interface RuntimePolicy {
 
 export const POLICY_FILE = join(ROOM_HOME, "policy.json");
 
-/** A Claude seat's denied tools: the sets its role lists in `claude.disallowedTools`. */
+/** A Claude seat's denied tools: the sets its role lists in `claude.disallowedTools`, each Bash rule mirrored for the PowerShell tool a settings change could hand the seat. */
 export function claudeDisallowed(raw: Record<string, any>, role: string): string[] {
   const { sets, roles } = raw.claude.disallowedTools as {
     sets: Record<string, string[]>;
@@ -124,7 +125,7 @@ export function claudeDisallowed(raw: Record<string, any>, role: string): string
   return (roles[role] ?? []).flatMap((name) => {
     if (!sets[name])
       throw new Error(`paseo/policy.json: claude.disallowedTools.roles.${role} names an unknown set "${name}"`);
-    return sets[name];
+    return sets[name].flatMap((rule) => (rule.startsWith("Bash(") ? [rule, `PowerShell(${rule.slice(5)}`] : [rule]));
   });
 }
 
@@ -158,6 +159,9 @@ export function loadPolicy(): RuntimePolicy {
       codex: need(parsed.codex?.launch, "codex.launch"),
       pi: need(parsed.pi?.launch, "pi.launch"),
       opencode: need(parsed.opencode?.launch, "opencode.launch"),
+      // the ACP harnesses: a policy written before they shipped has no section; theirs is empty
+      devin: parsed.devin?.launch ?? { env: {} },
+      grok: parsed.grok?.launch ?? { env: {} },
     },
     claude: { deniedSkills: claude.deniedSkills ?? [] },
     codex: need(parsed.codex?.runtime, "codex.runtime"),

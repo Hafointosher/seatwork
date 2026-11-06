@@ -29,14 +29,23 @@ test("the HQ project is opened once however many ask at the same moment; when th
   // a paseo CLI that lists the HQ project beside one of the user's, and notes what it is told to delete
   const failing = process.env.SEATWORK_PASEO_BIN;
   const deleted = join(ROOM_HOME, "..", "deleted-projects");
-  const cli = join(ROOM_HOME, "..", "paseo-lists-projects");
+  const cli = join(ROOM_HOME, "..", process.platform === "win32" ? "paseo-lists-projects.mjs" : "paseo-lists-projects");
   const listed = JSON.stringify([
     { projectId: "prj_mine", path: "/somewhere/else" },
     { projectId: "prj_hq", path: roomProjectDir() },
   ]);
   writeFileSync(
     cli,
-    `#!/bin/sh\ncase "$1 $2" in\n"project ls") echo '${listed}' ;;\n"project delete") echo "$3" >> '${deleted}' ;;\n*) exit 1 ;;\nesac\n`,
+    process.platform === "win32"
+      ? [
+          'import { appendFileSync } from "node:fs";',
+          `const key = process.argv.slice(2, 4).join(" ");`,
+          `if (key === "project ls") console.log(${JSON.stringify(listed)});`,
+          `else if (key === "project delete") appendFileSync(${JSON.stringify(deleted)}, \`\${process.argv[4]}\\n\`);`,
+          "else process.exit(1);",
+          "",
+        ].join("\n")
+      : `#!/bin/sh\ncase "$1 $2" in\n"project ls") echo '${listed}' ;;\n"project delete") echo "$3" >> '${deleted}' ;;\n*) exit 1 ;;\nesac\n`,
     { mode: 0o755 },
   );
   process.env.SEATWORK_PASEO_BIN = cli;

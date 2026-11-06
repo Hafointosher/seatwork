@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import { GATE, type Gate, type Older, type Reading } from "./gate";
 import { isoTime, lintSentence } from "./lint";
 import type { PairBook } from "./pairs";
@@ -201,11 +202,11 @@ export class DecisionBook {
     const named = String(args.project ?? "").trim();
     const own = this.deps.projectOf(agent);
     if (own) {
-      if (named && named !== own && named !== own.split("/").at(-1))
-        throw new KnowledgeRefused(`you record the decisions of your own project, ${own.split("/").at(-1)}`);
+      if (named && named !== own && named !== basename(own))
+        throw new KnowledgeRefused(`you record the decisions of your own project, ${basename(own)}`);
       return { key: `project:${own}`, needsPerson: true };
     }
-    const roots = this.deps.projects().filter((one) => one === named || one.split("/").at(-1) === named);
+    const roots = this.deps.projects().filter((one) => one === named || basename(one) === named);
     if (roots.length > 1) throw new KnowledgeRefused(`more than one project is named ${named}: give its full path`);
     if (roots.length === 0)
       throw new KnowledgeRefused(`a project's decision names its \`project\`; none is named ${named || "at all"}`);

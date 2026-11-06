@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { shareEntry } from "../win32";
 import { GIT_SAFE_ARGS, GIT_SAFE_ENV, runGit } from "../git";
 import { changesSince, isTestPath } from "./handin";
 
@@ -54,7 +55,7 @@ async function placeIn(cwd: string, to: string): Promise<{ root: string; here: s
 /** Links the project's installed dependency folders into a copy. */
 function linkShared(cwd: string, here: string): void {
   for (const name of SHARED)
-    if (existsSync(join(cwd, name)) && !existsSync(join(here, name))) symlinkSync(join(cwd, name), join(here, name));
+    if (existsSync(join(cwd, name)) && !existsSync(join(here, name))) shareEntry(join(cwd, name), join(here, name));
 }
 
 /** Builds a control in `to` for the work in `cwd` since `head`: the whole repository, its tests run from `cwd`'s place in it, its installed dependency folders linked and nothing installed; a string says why there is none. */

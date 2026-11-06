@@ -1,5 +1,6 @@
 import { hostOf, MAIL_POLICY, PROJECT, ROOM_HOME, shipSql } from "./support/room";
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -161,7 +162,11 @@ test("GC clears what agent CLIs left in a seat's home once no seat of it is open
   // the owner's own sessions, shared into a seat's home by a link, are not the room's
   put("owner/kept.jsonl", true);
   mkdirSync(join(runtimes, "pi", "peer"), { recursive: true });
-  symlinkSync(join(runtimes, "owner"), join(runtimes, "pi", "peer", "sessions"));
+  symlinkSync(
+    join(runtimes, "owner"),
+    join(runtimes, "pi", "peer", "sessions"),
+    process.platform === "win32" ? "junction" : undefined,
+  );
   const table = {
     codex: {
       rebuilt: [".tmp", "tmp", "../../owner", "/etc"],
@@ -173,6 +178,7 @@ test("GC clears what agent CLIs left in a seat's home once no seat of it is open
   const done = sweepRuntimes(runtimes, new Set(["codex-peer"]), table);
   const left = (home: string) =>
     (readdirSync(join(runtimes, home), { recursive: true }) as string[])
+      .map((path) => path.replaceAll("\\", "/"))
       .filter((path) => statSync(join(runtimes, home, path)).isFile())
       .sort();
   // a home with no open seat: what the CLI makes again is gone, old session files are gone, the rest stays
@@ -335,7 +341,19 @@ test(
       mkdirSync(scratch(role), { recursive: true });
       writeFileSync(join(scratch(role), "scratch"), "x");
     }
-    chmodSync(scratch("lens"), 0o500);
+    // on Windows the lock is a process working in the home; Node opens files with FILE_SHARE_DELETE, so a handle is no lock
+    const marker = join(ROOM_HOME, "lens-locked");
+    const held =
+      process.platform === "win32"
+        ? spawn(
+            process.execPath,
+            ["-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "1"); setInterval(() => {}, 60000)`],
+            { cwd: scratch("lens"), stdio: "ignore" },
+          )
+        : null;
+    if (held !== null)
+      for (const nap = new Int32Array(new SharedArrayBuffer(4)); !existsSync(marker);) Atomics.wait(nap, 0, 0, 10);
+    else chmodSync(scratch("lens"), 0o500);
     try {
       const done = sweepRuntimes(runtimes, new Set(), { codex: { rebuilt: [".tmp"], sessions: [] } });
 
@@ -345,7 +363,8 @@ test(
         done.join("\n"),
       );
     } finally {
-      chmodSync(scratch("lens"), 0o700);
+      if (held === null) chmodSync(scratch("lens"), 0o700);
+      else held.kill();
     }
   },
 );

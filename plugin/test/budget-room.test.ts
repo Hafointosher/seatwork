@@ -8,7 +8,7 @@ import { git } from "./support/git";
 import { editPolicy, pluginRoom } from "./support/plugin";
 import { projectFolder } from "./support/seats";
 
-const project = (name: string) => realpathSync(projectFolder(name));
+const project = (name: string) => realpathSync.native(projectFolder(name));
 const capped = project("budget-capped");
 const free = project("budget-free");
 

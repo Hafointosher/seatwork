@@ -10,11 +10,13 @@ import {
   roomSettings,
   setupInit,
   setupProject,
+  setupProjectAdd,
+  setupProjectRemove,
   setupRemove,
   setupState,
 } from "./shared/setup";
 
-const VERSION = "1.5.2";
+const VERSION = "1.6.2";
 
 /** Seatwork on Paseo: the setup screen first; the room once it is set up, hooked to Paseo's events only while it runs. */
 export default function contribute(server: PluginServerContext) {
@@ -44,6 +46,8 @@ export default function contribute(server: PluginServerContext) {
   server.handle(setupInit, (choices, { paseo }) => life.init(paseo, choices));
   server.handle(setupRemove, (_input, { paseo }) => life.remove(paseo));
   server.handle(setupProject, ({ name, models }, { paseo }) => life.project(paseo, name, models));
+  server.handle(setupProjectAdd, (input, { paseo }) => life.projectAdd(paseo, input));
+  server.handle(setupProjectRemove, ({ name }, { paseo }) => life.projectRemove(paseo, name));
 
   return async () => {
     offCreate();

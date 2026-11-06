@@ -1,6 +1,7 @@
-import { appendFileSync, chmodSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { privateEntry } from "../win32";
 import { join } from "node:path";
-import { inRoom, maySpawn, reviews, ROLES, routeOpen, SPAWN, traits } from "../../shared/workflow";
+import { inRoom, maySpawn, reviews, ROLES, ROOM_ROLE, routeOpen, SPAWN, traits } from "../../shared/workflow";
 import { MailEngine, ROOM_MAIL } from "../coordination/engine";
 import { Collector } from "../gc";
 import { HostNotReady, type Host } from "../host";
@@ -44,13 +45,14 @@ import { folderDecisions, jevPlaces, jevView, setJevPlace } from "./owner";
 import { Jev, type JevCheck } from "../jev/index";
 import { Knowledge } from "../knowledge/index";
 import { Safety } from "../safety/index";
+import type { AcpRequest } from "../safety/acp";
 import { secretsOf } from "../safety/gate/rules/secrets";
 import { render, SKILLS_ENV, type Cli } from "../safety/hooks";
 import { WorkStores } from "../tasks/stores";
 import { Callers, serverToken } from "./callers";
 import { errorText, fromRoom, releaseWork, sweepLeases, taskOf, type RoomContext } from "./context";
 import { lookAtRunningTurns } from "./council";
-import { fitAt, launch, ownAgentMode, promptMark, type Launched, type SeatLaunch } from "./launch";
+import { fitAt, launch, ownAgentMode, promptMark, providerOf, type Launched, type SeatLaunch } from "./launch";
 import { mailHealth, registerTools } from "./tools";
 import { rotationFailed, turnEnded, type SeatEvent, type TurnEnd } from "./turns";
 import { excerpt } from "../excerpt";
@@ -80,6 +82,10 @@ export interface Room {
   archived(seat: SeatEvent): Promise<void>;
   closed(agentId: string): void;
   permissionAsked(seat: SeatEvent, request: unknown): Promise<void>;
+  answerPermission(
+    seat: SeatEvent,
+    request: unknown,
+  ): Promise<{ allow: true } | { allow: false; message: string } | null>;
   permissionAnswered(agentId: string): void;
   olderSeats(): Promise<string[]>;
   ownSeat(): ReturnType<typeof operatorState>;
@@ -323,7 +329,7 @@ function startTimers(room: RoomContext, gc: Collector): { touch(): void; stop():
     void keepOperator(
       {
         host: room.host,
-        provider: () => enabledSeats().find((seat) => inRoom(seat.role))?.provider,
+        provider: roomSeatProvider,
         fit: fitAt,
         folder: roomProjectDir(),
         log,
@@ -461,6 +467,23 @@ async function seatArchived(room: RoomContext, gc: Collector, seat: SeatEvent): 
   }
 }
 
+/** The provider the room's own seat starts on: the one the table in force gives its role, not just a seat of that role that is set up. */
+function roomSeatProvider(): string | undefined {
+  const provider = ROOM_ROLE ? providerOf(ROOM_ROLE) : undefined;
+  return provider && enabledSeats().some((seat) => seat.provider === provider) ? provider : undefined;
+}
+
+/** An ACP seat's permission request, read by the room's guard as a hook's would be; null leaves it for a person. */
+async function answerPermission(
+  room: RoomContext,
+  agent: SeatEvent,
+  request: unknown,
+): Promise<{ allow: true } | { allow: false; message: string } | null> {
+  const seat = parseSeat(agent.provider);
+  if (!seat) return null;
+  return room.safety.answerAcp(agent.id, seat.harness, request as AcpRequest);
+}
+
 /** A seat waits for a permission: its Owner is asked to answer, where the route up is open. */
 async function permissionAsked(room: RoomContext, agent: SeatEvent, request: unknown): Promise<void> {
   const { engine } = room;
@@ -583,7 +606,7 @@ export function startRoom(input: {
 }): Room {
   const { host, version, filesFrom } = input;
   // the room home holds mail bodies and copies of the user's harness config: its owner only
-  chmodSync(ROOM_HOME, 0o700);
+  privateEntry(ROOM_HOME, 0o700);
   mkdirSync(ROOM_MAIL, { recursive: true });
   mkdirSync(roomProjectDir(), { recursive: true });
   const policy = loadPolicy();
@@ -728,14 +751,11 @@ export function startRoom(input: {
       knowledge.turnLost(agentId);
     },
     permissionAsked: (agent, request) => permissionAsked(room, agent, request),
+    answerPermission: (agent, request) => answerPermission(room, agent, request),
     permissionAnswered(agentId) {
       engine.settlePermission(agentId);
     },
-    ownSeat: () =>
-      operatorState(
-        { host, provider: () => enabledSeats().find((seat) => inRoom(seat.role))?.provider },
-        timers.keeping,
-      ),
+    ownSeat: () => operatorState({ host, provider: roomSeatProvider }, timers.keeping),
     async olderSeats() {
       return [...(await host.live()).values()]
         .filter((seat) => {

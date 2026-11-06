@@ -233,16 +233,18 @@ export class Knowledge {
     return root ? join(root, PROJECT_DIR) : this.deps.roomDir;
   }
 
-  /** The store of a project, or of the room's own seats for `null`, made on first use. */
+  /** The store of a project, or of the room's own seats for `null`, made on first use; a closed district takes no write. */
   storeOf(root: string | null): KnowledgeStore {
+    if (this.closed) throw new Error("seatwork: the knowledge district is closed");
     const dir = this.dirOf(root);
     let store = this.stores.get(dir);
     if (!store) this.stores.set(dir, (store = new KnowledgeStore(dir, this.deps.busyTimeoutMs, () => this.now())));
     return store;
   }
 
-  /** The store of a project or of the room when it exists: reading never makes one. */
+  /** The store of a project or of the room when it exists: reading never makes one, and a closed district opens none. */
   private existing(root: string | null): KnowledgeStore | null {
+    if (this.closed) return null;
     const dir = this.dirOf(root);
     return this.stores.has(dir) || existsSync(join(dir, "knowledge.db")) ? this.storeOf(root) : null;
   }
@@ -704,8 +706,11 @@ export class Knowledge {
 
   /** Closes every store. */
   close(): void {
+    this.closed = true;
     this.searched.clear();
     for (const store of this.stores.values()) store.close();
     this.stores.clear();
   }
+
+  private closed = false;
 }

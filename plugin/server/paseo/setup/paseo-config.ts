@@ -1,4 +1,5 @@
-import { copyFileSync, chmodSync, existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { privateEntry } from "../../win32";
 import { join } from "node:path";
 import type { PaseoApi } from "../api";
 import { stamp } from "../../gc";
@@ -21,7 +22,7 @@ function dropsKeys(before: unknown, after: unknown): boolean {
 
 /** Whether two paths are one folder, links resolved. */
 const sameDir = (a: string, b: string) => {
-  const real = (dir: string) => (existsSync(dir) ? realpathSync(dir) : dir);
+  const real = (dir: string) => (existsSync(dir) ? realpathSync.native(dir) : dir);
   return real(a) === real(b);
 };
 
@@ -78,7 +79,7 @@ function writeConfig(file: string, next: Json): void {
   const temporary = `${file}.${process.pid}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
   renameSync(temporary, file);
-  chmodSync(file, 0o600);
+  privateEntry(file, 0o600);
 }
 
 /** The daemon switches the room cares about and the SDK cannot set, as this daemon's config.json has them. */

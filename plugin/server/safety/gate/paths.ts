@@ -1,4 +1,5 @@
 import { posix } from "node:path";
+import { toGatePath } from "../../win32";
 import { literal, type Part, type Script, type Word } from "./shell";
 import type { Known, Value, Variable } from "./types";
 
@@ -55,18 +56,22 @@ export function homeOf(known: Known): string | null {
 /** What one run-time part of a word is worth: a variable's value, a substitution's text, or nothing known. */
 function fill(part: Exclude<Part, { kind: "text" | "tilde" }>, known: Known): Variable & { text: string | null } {
   if (part.kind === "param") {
-    if (!/^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$/.test(part.raw)) return { text: null, value: null, temp: false };
-    const set = known.vars.get(part.name);
+    const name = part.name.replace(/^env:/i, "").toUpperCase();
+    const set = known.vars.get(part.name) ?? known.vars.get(name);
     if (set) return { ...set, text: set.value };
     const builtin =
-      part.name === "HOME"
+      name === "HOME" || name === "USERPROFILE"
         ? known.place.home
-        : part.name === "PWD"
+        : name === "PWD"
           ? known.cwd
-          : part.name === "TMPDIR"
+          : name === "TMPDIR" || name === "TEMP" || name === "TMP"
             ? known.place.tmp
             : null;
-    return { text: builtin, value: builtin, temp: part.name === "TMPDIR" && builtin !== null };
+    return {
+      text: builtin,
+      value: builtin,
+      temp: (name === "TMPDIR" || name === "TEMP" || name === "TMP") && builtin !== null,
+    };
   }
   if (part.kind === "command") return substitution(part.script, known);
   if (part.kind === "process") return { text: "/dev/fd/63", value: "/dev/fd/63", temp: false };
@@ -109,9 +114,10 @@ function lookup(words: Word[], name: string | undefined, known: Known): string |
 /** The absolute path a value names, against the command's folder; null when unknown. */
 export function absolute(value: Value, cwd: string | null): string | null {
   if (value.text === null) return null;
-  if (value.text.startsWith("/")) return posix.normalize(value.text);
-  if (value.text.startsWith("~")) return null;
-  return cwd ? posix.join(cwd, value.text) : null;
+  const spelled = toGatePath(value.text);
+  if (spelled.startsWith("/")) return posix.normalize(spelled);
+  if (spelled.startsWith("~")) return null;
+  return cwd ? posix.join(cwd, spelled) : null;
 }
 
 const TEMP_ROOTS = ["/tmp/", "/var/tmp/", "/private/tmp/", "/private/var/tmp/"];

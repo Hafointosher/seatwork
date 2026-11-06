@@ -10,7 +10,8 @@
     "mistral": ["mistral", "codestral", "devstral"],
     "xai": ["grok"],
     "moonshot": ["kimi"],
-    "zhipu": ["glm"]
+    "zhipu": ["glm"],
+    "cognition": ["swe", "devin"]
   },
-  "byHarness": { "claude": "anthropic", "codex": "openai" }
+  "byHarness": { "claude": "anthropic", "codex": "openai", "devin": "cognition", "grok": "xai" }
 }

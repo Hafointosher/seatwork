@@ -1,7 +1,7 @@
 import { deferred, hostOf, MAIL_POLICY, ROOM_HOME, shipSql } from "./support/room";
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { test } from "node:test";
 import { MailError } from "../server/coordination/address";
 import { MailEngine, type NewMail } from "../server/coordination/engine";
@@ -580,11 +580,13 @@ test("a seat that reads every project searches another project's mail, or all of
   engine.rememberSeat(seat(id.peer, "peer", id.lead, project));
   await engine.post(mail(id.peer, "INSTRUCTION: use the offset index", { from: { agentId: id.lead, role: "lead" } }));
 
-  const name = project.split("/").pop()!;
+  const name = basename(project);
   for (const where of [name, "all"])
     assert.match(
       inbox(engine, id.hq, { view: "search", q: "offset", project: where }, Date.now()),
-      new RegExp(`^\\[${project}\\]\\n#\\d+ .* · INSTRUCTION: use the offset index · `),
+      new RegExp(
+        `^\\[${project.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\]\\n#\\d+ .* · INSTRUCTION: use the offset index · `,
+      ),
     );
   assert.throws(
     () => inbox(engine, id.peer, { view: "search", q: "offset", project: "all" }, Date.now()),

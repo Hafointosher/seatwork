@@ -36,6 +36,14 @@ const project = z.object({
   error: z.string().nullable(),
 });
 
+/** What a finished removal reports back through the state: the seats it took out, where the room's folder went, the project notes it carried, and what it could not do. */
+const removal = z.object({
+  removed: z.array(z.string()),
+  movedTo: z.string(),
+  projects: z.array(z.object({ root: z.string(), moved: z.array(z.string()), left: z.array(z.string()) })),
+  notes: z.array(z.string()),
+});
+
 export const setupState = defineRpc({
   name: "setup.state",
   input: z.object({}),
@@ -46,7 +54,11 @@ export const setupState = defineRpc({
     table: z.json(),
     harnesses: z.array(harness),
     projects: z.array(project),
+    known: z.array(z.object({ name: z.string(), root: z.string() })),
     checks: z.array(z.object({ id: z.string(), label: z.string(), ok: z.boolean().nullable(), detail: z.string() })),
+    removing: z.boolean(),
+    removed: removal.nullable(),
+    removeError: z.string().nullable(),
   }),
 });
 
@@ -59,18 +71,29 @@ export const setupInit = defineRpc({
 export const setupRemove = defineRpc({
   name: "setup.remove",
   input: z.object({}),
-  output: z.object({
-    removed: z.array(z.string()),
-    movedTo: z.string(),
-    projects: z.array(z.object({ root: z.string(), moved: z.array(z.string()), left: z.array(z.string()) })),
-    notes: z.array(z.string()),
-  }),
+  output: z.object({ started: z.boolean() }),
 });
 
 export const setupProject = defineRpc({
   name: "setup.project",
   input: z.object({ name: z.string(), models: modelChoices.nullable() }),
   output: z.object({ own: z.boolean(), seats: z.array(z.string()) }),
+});
+
+export const setupProjectAdd = defineRpc({
+  name: "setup.project-add",
+  input: z.object({
+    path: z.string().min(1).max(4096),
+    name: z.string().max(256).optional(),
+    mission: z.string().max(8192).optional(),
+  }),
+  output: z.object({ message: z.string() }),
+});
+
+export const setupProjectRemove = defineRpc({
+  name: "setup.project-remove",
+  input: z.object({ name: z.string().max(256) }),
+  output: z.object({ message: z.string() }),
 });
 
 const jevCheck = z.object({ at: z.string(), ok: z.boolean(), ms: z.number().nullable(), why: z.string().nullable() });

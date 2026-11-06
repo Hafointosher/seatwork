@@ -42,8 +42,13 @@ import {
   type Defs,
 } from "./state";
 import type { Doubt, Finding, Known, Place, Scene, Value, Variable } from "./types";
+import { parseWindows } from "./windows";
+import { toGatePath } from "../../win32";
 
 /** Walks a command line as the shell would, and keeps what each command it runs does. */
+
+/** The grammar a command line is written in: POSIX sh, PowerShell or cmd. */
+export type ShellKind = "sh" | "ps" | "cmd";
 
 /** What the reading asks of the machine: git, the file system, the files the room's seats changed, a small file as it stands, and the real file a command word runs. */
 export interface Tools extends GitTools, FileTools {
@@ -83,6 +88,8 @@ const MAX_PAIRS = 32;
 const NO_FILES: ReadonlyMap<string, string> = new Map();
 const RISKY =
   /\b(rm|git|dd|mkfs|diskutil|shred|truncate|find|mv|chmod|chown|curl|wget|sudo|eval|sh|bash|zsh|python\d*|node|perl|ruby|php|kubectl|terraform|docker)\b|>/;
+const RISKY_WIN =
+  /\b(Remove-Item|del|erase|rd|rmdir|format|diskpart|reg|attrib|move|copy|xcopy|robocopy|Rename-Item|icacls|takeown|taskkill|Stop-Process|Set-Content|Out-File|Add-Content|Clear-Content|New-Item|Invoke-Expression|iex|irm|iwr|Invoke-WebRequest|certutil|mshta|rundll32|schtasks|Set-ExecutionPolicy|git)\b|>/i;
 
 /** Everything a command line does that the guard keeps, and every part of it the gate could not read. */
 export async function evaluate(
@@ -91,16 +98,24 @@ export async function evaluate(
   place: Place,
   config: GateConfig,
   tools: Tools,
+  kind: ShellKind = "sh",
 ): Promise<Evaluation> {
   const walk = new Walk(place, config, tools, Date.now() + config.budgetMs);
   if (Buffer.byteLength(command) > config.maxBytes) {
     walk.out.doubt(`the command is longer than ${config.maxBytes} bytes`, command.slice(0, 200));
     return walk.result();
   }
-  const start = startState(cwd);
-  const rc = tools.rc?.() ?? null;
-  if (rc) await seed(start, rc, place, config, tools);
-  await walk.text(command, start, 0);
+  const start = startState(cwd ? toGatePath(cwd) : null);
+  if (kind === "sh") {
+    const rc = tools.rc?.() ?? null;
+    if (rc) await seed(start, rc, place, config, tools);
+    await walk.text(command, start, 0);
+  } else {
+    const parsed = parseWindows(command, kind);
+    await walk.top(parsed.script, start, command);
+    if (parsed.unreadable && (RISKY.test(parsed.unreadable) || RISKY_WIN.test(parsed.unreadable)))
+      walk.out.doubt("the room could not read the line", parsed.unreadable);
+  }
   walk.finish();
   return walk.result();
 }
@@ -166,13 +181,18 @@ class Walk implements Reader {
   /** Notes a file the line writes or removes in the seat's tree, outside the room's folder and git's; null is a program's write whose path waits for run time, counted where the program runs. */
   noteChange(value: Value | null, known: Known): void {
     if (this.changes || (value && isTemp(value, known))) return;
-    const spelled = value ? (value.text ?? value.prefix) : "";
+    const spelled = value ? toGatePath(value.text ?? value.prefix) : "";
     if (spelled.startsWith("~")) return;
     const path = spelled.startsWith("/") ? posix.normalize(spelled) : known.cwd ? posix.join(known.cwd, spelled) : null;
     const parts = path?.split("/") ?? [];
     if (!path || parts.includes(".git") || (this.place.roomFolder !== null && parts.includes(this.place.roomFolder)))
       return;
     this.changes = [this.place.project, this.place.start].some((root) => root !== null && within(path, root));
+  }
+
+  /** A command tree read top-down: the entry a Windows line takes, its script already read. */
+  async top(script: Script, state: State, src: string): Promise<void> {
+    await this.script(script, state, { pipeline: null, stage: 0, src, depth: 0 });
   }
 
   /** A shell line read and walked; what bash cannot parse is scanned for risky words. */

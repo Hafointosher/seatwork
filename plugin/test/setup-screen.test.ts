@@ -100,9 +100,24 @@ const paseo = {
     open: async ({ cwd }: { cwd: string }) => void daemon.workspaces.push(cwd),
     archive: async (id: string) => void (daemon.workspaces = daemon.workspaces.filter((dir) => dir !== id)),
   },
+  projects: {
+    list: async () => ({
+      projects: daemon.workspaces.map((projectRootPath) => ({
+        projectDisplayName: projectRootPath.split(/[\\/]/).pop(),
+        projectRootPath,
+      })),
+    }),
+  },
   agents: {
     list: async ({ filter }: { filter?: { includeArchived?: boolean } } = {}) => ({
       entries: [...daemon.open, ...(filter?.includeArchived ? daemon.archived : [])].map((agent) => ({ agent })),
+    }),
+    ref: (id: string) => ({
+      archive: async () => {
+        const at = daemon.open.findIndex((agent) => agent.id === id);
+        if (at >= 0) daemon.archived.push({ ...daemon.open.splice(at, 1)[0], archivedAt: "2026-10-17" });
+        return { archivedAt: "2026-10-17" };
+      },
     }),
   },
 };
@@ -152,6 +167,8 @@ test("a daemon that only downloaded the plugin: nothing is created, a room seat 
       ["codex", false],
       ["pi", false],
       ["opencode", false],
+      ["devin", false],
+      ["grok", false],
     ],
   );
   assert.equal(screen.harnesses[1].why, "codex is not installed");
@@ -174,7 +191,7 @@ test("Init sets the room up and starts it without a reload; Apply restarts it on
     first.seats.includes("claude-hq") && "claude-hq" in daemon.config.providers && "my-own" in daemon.config.providers,
   );
   assert.deepEqual(daemon.config.agentProfiles.map((p) => p.id).slice(0, 2), ["mine", "agent_profile_seatwork_hq"]);
-  assert.deepEqual(daemon.workspaces, [realpathSync(join(ROOM_HOME, "hq-seatwork"))]);
+  assert.deepEqual(daemon.workspaces, [realpathSync.native(join(ROOM_HOME, "hq-seatwork"))]);
   const policy = () => JSON.parse(readFileSync(join(ROOM_HOME, "policy.json"), "utf8"));
   assert.deepEqual([policy().owner.chime, policy().mail.port], [false, 0]);
   // the daemon as the room's policy has it: browser tools and terminal hooks on, and the owner's own agents keep
@@ -219,7 +236,7 @@ test("a project's own models are written into the project from the screen and ta
   const project = async () => ((await state()) as unknown as { projects: object[] }).projects[0];
   const marker = () => JSON.parse(readFileSync(join(PROJECT, ".seatwork", "room.json"), "utf8")) as { models?: object };
   const write = (name: string, models: object | null) => call("rpc setup.project", { name, models }, context);
-  const shop = { name: "shop", root: realpathSync(PROJECT), error: null };
+  const shop = { name: "shop", root: realpathSync.native(PROJECT), error: null };
   assert.deepEqual(await project(), { ...shop, own: false, models: {} });
 
   // its Supervisor moves to an agent CLI the room has no seat for: the seat is set up first
@@ -354,8 +371,8 @@ test("the screen says when the room's own seat is not running, so the sidebar ne
 
 test("removing the room waits for its seats, then takes it out of Paseo and out of the projects it worked in, keeps all of it beside its home, and leaves the plugin asleep", async () => {
   // a registered project, a folder a seat ran in, one with a linked .seatwork, one the room never knew
-  const [seatDir, linked, stranger] = ["seat-ran-here", "linked", "stranger"].map((name) =>
-    join(realpathSync(PROJECT), "..", name),
+  const [seatDir, linked, stranger, gone, emptied] = ["seat-ran-here", "linked", "stranger", "gone", "emptied"].map(
+    (name) => join(realpathSync.native(PROJECT), "..", name),
   );
   const seatwork = (dir: string, ...files: string[]) => {
     mkdirSync(join(dir, ".seatwork", "plans"), { recursive: true });
@@ -376,8 +393,23 @@ test("removing the room waits for its seats, then takes it out of Paseo and out 
   seatwork(seatDir, "status.md");
   seatwork(stranger, "status.md");
   mkdirSync(linked);
-  symlinkSync(join(stranger, ".seatwork"), join(linked, ".seatwork"));
-  writeFileSync(join(ROOM_HOME, "projects.json"), JSON.stringify({ projects: [{ name: "shop", cwd: PROJECT }] }));
+  symlinkSync(
+    join(stranger, ".seatwork"),
+    join(linked, ".seatwork"),
+    process.platform === "win32" ? "junction" : undefined,
+  );
+  // a registered project's folder may be gone, or have lost its .seatwork, by the time the room is removed
+  mkdirSync(emptied, { recursive: true });
+  writeFileSync(
+    join(ROOM_HOME, "projects.json"),
+    JSON.stringify({
+      projects: [
+        { name: "shop", cwd: PROJECT },
+        { name: "gone", cwd: gone },
+        { name: "emptied", cwd: emptied },
+      ],
+    }),
+  );
   appendFileSync(
     join(ROOM_HOME, "registry-log.jsonl"),
     [seatDir, linked, join(ROOM_HOME, "hq-seatwork")]
@@ -385,17 +417,6 @@ test("removing the room waits for its seats, then takes it out of Paseo and out 
       .join(""),
   );
 
-  daemon.open = [
-    { id: "a1", provider: "claude-lead", title: "[Lead] billing" },
-    { id: "a2", provider: "claude", title: "not a seat" },
-  ];
-  await assert.rejects(
-    Promise.resolve(call("rpc setup.remove", {}, context)),
-    /1 room seat is still open \(\[Lead\] billing\); archive them first/,
-  );
-  assert.ok("claude-hq" in daemon.config.providers && existsSync(join(PROJECT, ".seatwork", "status.md")));
-
-  daemon.open = [daemon.open[1]];
   // the room's archived HQ seat and its Claude session, beside an agent of the owner's in the same folder
   const hqDir = join(ROOM_HOME, "hq-seatwork");
   const sessions = join(process.env.CLAUDE_CONFIG_DIR!, "projects", hqDir.replace(/[^A-Za-z0-9]/g, "-"));
@@ -405,12 +426,31 @@ test("removing the room waits for its seats, then takes it out of Paseo and out 
     { id: "z1", provider: "claude-hq", cwd: hqDir, archivedAt: "2026-10-17", persistence: { sessionId: "hq-session" } },
     { id: "z2", provider: "claude", cwd: hqDir, archivedAt: "2026-10-17", persistence: { sessionId: "own-session" } },
   ];
-  const { removed, movedTo, projects, notes } = (await call("rpc setup.remove", {}, context)) as {
-    removed: string[];
-    movedTo: string;
-    projects: { root: string; moved: string[]; left: string[] }[];
-    notes: string[];
-  };
+  daemon.open = [
+    { id: "a1", provider: "claude-lead", title: "[Lead] billing" },
+    { id: "a2", provider: "claude", title: "not a seat" },
+  ];
+  // Remove archives the seat the room still has open itself; the owner's own agent is not touched.
+  // The RPC only starts the work; the state reports it done with its result.
+  assert.deepEqual(await call("rpc setup.remove", {}, context), { started: true });
+  assert.deepEqual(await call("rpc setup.remove", {}, context), { started: false });
+  let removed: string[] = [];
+  let movedTo = "";
+  let projects: { root: string; moved: string[]; left: string[] }[] = [];
+  let notes: string[] = [];
+  for (let tries = 0; tries < 200; tries += 1) {
+    const state = (await call("rpc setup.state", {}, context)) as {
+      removing: boolean;
+      removed: { removed: string[]; movedTo: string; projects: typeof projects; notes: string[] } | null;
+      removeError: string | null;
+    };
+    if (state.removeError) throw new Error(state.removeError);
+    if (state.removed) {
+      ({ removed, movedTo, projects, notes } = state.removed);
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
 
   assert.deepEqual(
     [Object.keys(daemon.config.providers), daemon.config.agentProfiles],
@@ -430,16 +470,25 @@ test("removing the room waits for its seats, then takes it out of Paseo and out 
   assert.deepEqual(daemon.config.providers.claude, { enabled: true, paseoTools: { enabled: true, disabledTools: [] } });
   const back = JSON.parse(readFileSync(paseoFile, "utf8"));
   assert.deepEqual([back.agents, back.features], [undefined, { dictation: { enabled: true } }]);
-  // the HQ seat's session goes with the room; the owner's own stays; the CLI that deletes the record fails here
+  // the open Lead seat was archived as Remove ran; the owner's own agent stays open
+  assert.deepEqual(
+    daemon.open.map((agent) => agent.id),
+    ["a2"],
+  );
+  assert.ok(daemon.archived.some((agent) => agent.id === "a1" && agent.archivedAt));
+  // the HQ seat's session goes with the room; the owner's own stays; the CLI that deletes the records fails here
   assert.deepEqual(readdirSync(sessions), ["own-session.jsonl"]);
   assert.ok(existsSync(join(movedTo, "claude-sessions", hqDir.replace(/[^A-Za-z0-9]/g, "-"), "hq-session.jsonl")));
-  assert.match(notes.join(" "), /Paseo still lists 1 archived seat of the room/);
+  assert.match(notes.join(" "), /Paseo still lists 2 archived seats of the room/);
   // the paseo CLI fails here: the HQ workspace is archived, and the screen is told the project's line stays
   assert.deepEqual(daemon.workspaces, [], "the HQ workspace is still listed in Paseo");
   assert.match(notes.join(" "), /hq-seatwork project is still in Paseo's list/);
+  // a registered project whose folder is gone, or whose .seatwork is missing, is said so instead of skipped quietly
+  assert.match(notes.join(" "), /gone is gone: its \.seatwork went with it/);
+  assert.match(notes.join(" "), /emptied.{0,40}\.seatwork is not there/);
 
   // the room's files leave .seatwork/ by name; the user's file stays, and so does its folder
-  const shop = projects.find((project) => project.root === realpathSync(PROJECT))!;
+  const shop = projects.find((project) => project.root === realpathSync.native(PROJECT))!;
   assert.deepEqual(
     [shop.moved.sort(), shop.left],
     [["mission.md", "notebook.md", "plans", "room.json", "shop-law.md", "status.md"], ["mine.txt"]],
@@ -454,7 +503,7 @@ test("removing the room waits for its seats, then takes it out of Paseo and out 
     "plans/billing.md",
   );
   // an emptied .seatwork/ goes; a linked .seatwork and a folder the room never knew are not touched
-  assert.deepEqual(projects.map((project) => project.root).sort(), [realpathSync(PROJECT), seatDir].sort());
+  assert.deepEqual(projects.map((project) => project.root).sort(), [realpathSync.native(PROJECT), seatDir].sort());
   assert.deepEqual(
     [
       existsSync(join(seatDir, ".seatwork")),

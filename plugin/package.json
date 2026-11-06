@@ -1,8 +1,8 @@
 {
   "name": "seatwork",
   "private": true,
-  "version": "1.5.2",
-  "description": "Paseo plugin: a Supervisor → Lead → Peer room across Claude, Codex, Pi and OpenCode, set up from its own screen in Paseo.",
+  "version": "1.6.2",
+  "description": "Paseo plugin: a Supervisor → Lead → Peer room across Claude, Codex, Pi, OpenCode, Devin and Grok, set up from its own screen in Paseo.",
   "files": [
     "paseo-plugin.json",
     "OVERVIEW.md",

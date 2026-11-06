@@ -446,9 +446,17 @@ test("a script that publishes, deploys or installs goes up as a warning; one tha
 
 test("a link in the work tree is not followed to a file outside it", async () => {
   const { dir, check } = project(START);
-  const outside = join(ROOM_HOME, `handin-outside-${repos}.ts`);
-  writeFileSync(outside, "debugger;\n");
-  symlinkSync(outside, join(dir, "link.ts"));
+  if (process.platform === "win32") {
+    // a file link needs a privilege Windows grants nobody by default; a junction is its link that needs none
+    const outsideDir = join(ROOM_HOME, `handin-outside-${repos}`);
+    mkdirSync(outsideDir, { recursive: true });
+    writeFileSync(join(outsideDir, "link.ts"), "debugger;\n");
+    symlinkSync(outsideDir, join(dir, "linkdir"), "junction");
+  } else {
+    const outside = join(ROOM_HOME, `handin-outside-${repos}.ts`);
+    writeFileSync(outside, "debugger;\n");
+    symlinkSync(outside, join(dir, "link.ts"));
+  }
   assert.equal((await check()).state, "empty");
 });
 

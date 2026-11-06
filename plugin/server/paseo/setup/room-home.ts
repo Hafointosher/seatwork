@@ -1,16 +1,7 @@
-import {
-  chmodSync,
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { stamp } from "../../gc";
+import { moveRename, privateEntry } from "../../win32";
 import { checkSetup, type RoomPlan, type Setup } from "./plan";
 
 const json = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
@@ -34,12 +25,17 @@ export function readSetup(roomHome: string): Setup {
   return checkSetup(parsed, file);
 }
 
-/** Moves a room home aside, whole, and returns where it went; it is kept for keepRemovedDays (shared/settings.json), a second later in its name when one moved that second already. */
-export function moveRoomHomeAside(roomHome: string): string {
+/** The dated name a room home moves aside to, a second later in its name when one moved that second already. */
+export function asideTarget(roomHome: string): string {
   let at = Date.now();
   while (existsSync(`${roomHome}.removed-${stamp(new Date(at))}`)) at += 1000;
-  const target = `${roomHome}.removed-${stamp(new Date(at))}`;
-  renameSync(roomHome, target);
+  return `${roomHome}.removed-${stamp(new Date(at))}`;
+}
+
+/** Moves a room home aside, whole, and returns where it went; it is kept for keepRemovedDays (shared/settings.json). */
+export function moveRoomHomeAside(roomHome: string): string {
+  const target = asideTarget(roomHome);
+  moveRename(roomHome, target);
   return target;
 }
 
@@ -65,7 +61,7 @@ export function writeRoomHome(input: {
   const { version } = readSetup(roomHome);
   // the room home holds mail and copies of the user's harness config: its owner only
   mkdirSync(roomHome, { recursive: true, mode: 0o700 });
-  chmodSync(roomHome, 0o700);
+  privateEntry(roomHome, 0o700);
 
   if (!input.seatsOnly) {
     // the room tree is replaced in one move, so a file dropped from the plugin is dropped here
@@ -75,8 +71,8 @@ export function writeRoomHome(input: {
     for (const stale of [next, previous]) rmSync(stale, { recursive: true, force: true });
     cpSync(join(pluginDir, "room"), next, { recursive: true });
     writeFileSync(join(next, "models.json"), json(plan.models));
-    if (existsSync(room)) renameSync(room, previous);
-    renameSync(next, room);
+    if (existsSync(room)) moveRename(room, previous);
+    moveRename(next, room);
     rmSync(previous, { recursive: true, force: true });
     writePrivate(join(roomHome, "policy.json"), json(plan.policy));
     writePrivate(join(roomHome, "policy.shipped.json"), json(plan.shipped));

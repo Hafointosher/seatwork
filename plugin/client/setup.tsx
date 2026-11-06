@@ -1,7 +1,7 @@
 import type { RpcOutput } from "@getpaseo/plugin";
 import type { PluginScreenProps, PluginSidebarItemProps } from "@getpaseo/plugin/client";
 import { useRpc, useSettings } from "@getpaseo/plugin/client";
-import { Icon, ScrollView } from "@getpaseo/plugin/client/react-native";
+import { Icon, ScrollView, TextInput } from "@getpaseo/plugin/client/react-native";
 import { SidebarRow } from "@getpaseo/plugin/client/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
@@ -20,7 +20,16 @@ import {
 import settings from "../shared/settings.json";
 import { ROOM_PROJECT, ROOM_ROLE, traits } from "../shared/workflow";
 import { roomClean } from "../shared/room";
-import { roomSettings, setupInit, setupProject, setupRemove, setupState, type RoomChoices } from "../shared/setup";
+import {
+  roomSettings,
+  setupInit,
+  setupProject,
+  setupProjectAdd,
+  setupProjectRemove,
+  setupRemove,
+  setupState,
+  type RoomChoices,
+} from "../shared/setup";
 import {
   Badge,
   Btn,
@@ -63,15 +72,22 @@ const short = (path: string) => path.replace(/^\/(Users|home)\/[^/]+/, "~");
 /** The sidebar row: it opens the screen, and says when the room is not set up or a check needs the Owner. */
 export function SetupItem({ theme, currentScreen, openScreen }: PluginSidebarItemProps) {
   const read = useRpc(setupState);
-  const state = useQuery({ queryKey: STATE_KEY, queryFn: () => read({}) });
+  const state = useQuery({
+    queryKey: STATE_KEY,
+    queryFn: () => read({}),
+    refetchInterval: (query: { state: { data?: unknown } }) =>
+      (query.state.data as State | undefined)?.removing ? 2000 : false,
+  });
   const data = state.data as State | undefined;
   const word = !data
     ? null
-    : !data.applied
-      ? "Set up"
-      : data.checks.some((check) => check.ok === false)
-        ? "Needs you"
-        : null;
+    : data.removing
+      ? "Removing"
+      : !data.applied
+        ? "Set up"
+        : data.checks.some((check) => check.ok === false)
+          ? "Needs you"
+          : null;
   return (
     <SidebarRow
       icon="Armchair"
@@ -98,7 +114,12 @@ export type Open = (to?: { project?: string; part?: Part }) => void;
 export function SetupScreen({ theme, layout, params, open }: PluginScreenProps & { open: Open }) {
   const c = theme.colors;
   const readState = useRpc(setupState);
-  const state = useQuery({ queryKey: STATE_KEY, queryFn: () => readState({}) });
+  const state = useQuery({
+    queryKey: STATE_KEY,
+    queryFn: () => readState({}),
+    refetchInterval: (query: { state: { data?: unknown } }) =>
+      (query.state.data as State | undefined)?.removing ? 2000 : false,
+  });
   const data = state.data as State | undefined;
   const [width, setWidth] = useState(0);
   const fit: Fit = { rail: width >= 1000, narrow: layout.compact || (width > 0 && width < 700) };
@@ -253,7 +274,7 @@ function Legend(props: { table: Table; harnesses: Harness[]; colors: Colors }) {
 }
 
 /** What Remove did: where the room went, whose notes went with it, and what it would not touch. */
-function removedLine(done: RpcOutput<typeof setupRemove>): string {
+function removedLine(done: NonNullable<State["removed"]>): string {
   const count = done.projects.length;
   const kept = done.projects
     .filter((project) => project.left.length > 0)
@@ -270,13 +291,14 @@ function removedLine(done: RpcOutput<typeof setupRemove>): string {
 /** The projects the room works in, each with what it changes in the room's table; a press opens one's models. */
 function ProjectsCard(props: {
   projects: Project[];
+  known: { name: string; root: string }[];
   running: Table;
   harnesses: Harness[];
   open: Open;
   fit: Fit;
   colors: Colors;
 }) {
-  const { projects, running, harnesses, open, fit, colors: c } = props;
+  const { projects, known, running, harnesses, open, fit, colors: c } = props;
   return (
     <Card colors={c}>
       <CardHead
@@ -320,11 +342,101 @@ function ProjectsCard(props: {
         ))}
         {projects.length === 0 ? (
           <Text style={{ ...small(c), paddingVertical: 10, paddingHorizontal: 12 }}>
-            No project is in the room yet. Open {OWN} in the {ROOM_PROJECT} project and write: set up project X.
+            No project is in the room yet. Put one of this host's Paseo projects in with Add project below.
           </Text>
         ) : null}
+        <AddProject known={known} first={projects.length === 0} colors={c} />
       </View>
     </Card>
+  );
+}
+
+/** The card's way in: the host's projects none of the room has, one press picks, Add puts it in the room. */
+function AddProject(props: { known: { name: string; root: string }[]; first: boolean; colors: Colors }) {
+  const { known, first, colors: c } = props;
+  const add = useRpc(setupProjectAdd);
+  const queries = useQueryClient();
+  const [picked, setPicked] = useState(null as string | null);
+  const [mission, setMission] = useState("");
+  const write = useMutation({
+    mutationFn: (path: string) => add({ path, mission: mission.trim() || undefined }),
+    onSuccess: () => void queries.invalidateQueries({ queryKey: STATE_KEY }),
+  });
+  if (known.length === 0 && !write.data)
+    return first ? (
+      <Text style={{ ...small(c), paddingVertical: 4, paddingHorizontal: 12 }}>
+        Paseo knows no other project; add it to Paseo first.
+      </Text>
+    ) : null;
+  return (
+    <View
+      style={{
+        gap: 10,
+        marginTop: 6,
+        padding: 12,
+        borderRadius: 11,
+        borderWidth: 1,
+        borderColor: c.border,
+        backgroundColor: c.surface2,
+      }}
+    >
+      {known.map((project) => {
+        const on = picked === project.root;
+        return (
+          <Pressable
+            key={project.root}
+            accessibilityRole="button"
+            accessibilityLabel={`${project.name}: put in the room`}
+            onPress={() => setPicked(on ? null : project.root)}
+            style={{ flexDirection: "row", alignItems: "center", gap: 10 }}
+          >
+            <Icon name={on ? "CircleCheck" : "Circle"} size={16} color={on ? c.accent : c.foregroundMuted} />
+            <View style={{ flex: 1, gap: 1 }}>
+              <Text numberOfLines={1} style={{ color: c.foreground, fontSize: 13, lineHeight: 18, fontWeight: "600" }}>
+                {project.name}
+              </Text>
+              <Text
+                {...MONO}
+                numberOfLines={1}
+                style={{ ...MONO.style, color: c.foregroundMuted, fontSize: 11.5, lineHeight: 16 }}
+              >
+                {short(project.root)}
+              </Text>
+            </View>
+          </Pressable>
+        );
+      })}
+      {picked ? (
+        <TextInput
+          accessibilityLabel="Its mission, one line"
+          placeholder="Its mission, one line (optional)"
+          placeholderTextColor={c.foregroundMuted}
+          value={mission}
+          onChangeText={setMission}
+          style={{
+            borderWidth: 1,
+            borderColor: c.border,
+            borderRadius: 9,
+            paddingHorizontal: 10,
+            paddingVertical: 7,
+            color: c.foreground,
+            fontSize: 13,
+            backgroundColor: c.surface0,
+          }}
+        />
+      ) : null}
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+        <Btn
+          label={write.isPending ? "Adding…" : "Add project"}
+          kind="primary"
+          disabled={!picked || write.isPending}
+          onPress={() => picked && write.mutate(picked)}
+          colors={c}
+        />
+        {write.data ? <Text style={{ ...small(c), flex: 1 }}>{write.data.message}</Text> : null}
+      </View>
+      {write.error ? <Text style={{ ...small(c), color: c.statusDanger }}>{failed(write.error)}</Text> : null}
+    </View>
   );
 }
 
@@ -572,7 +684,7 @@ function RoomSetup({
     },
   });
   const done = init.data as RpcOutput<typeof setupInit> | undefined;
-  const moved = remove.data as RpcOutput<typeof setupRemove> | undefined;
+  const moved = data.removed ? removedLine(data.removed) : null;
 
   // a room set up from a terminal: the screen starts from what it runs on
   const applied = data.applied;
@@ -594,7 +706,7 @@ function RoomSetup({
   const shipped = data.table as unknown as Table;
   const table = merge(shipped, values.models) as Table;
   const running = applied ? runningTable(data) : null;
-  const busy = init.isPending || remove.isPending;
+  const busy = init.isPending || remove.isPending || data.removing;
 
   const waiting =
     !applied || !running
@@ -623,9 +735,9 @@ function RoomSetup({
       busy={busy}
       onApply={apply}
       onDiscard={() => save({ models: applied!.models, chime: applied!.chime })}
-      error={init.error}
+      error={init.error ?? data.removeError}
       notes={done?.notes ?? []}
-      moved={moved ? removedLine(moved) : null}
+      moved={moved}
       colors={c}
     />
   );
@@ -681,6 +793,7 @@ function RoomSetup({
     applied && running ? (
       <ProjectsCard
         projects={data.projects}
+        known={data.known}
         running={running}
         harnesses={data.harnesses}
         open={open}
@@ -715,7 +828,7 @@ function RoomSetup({
           confirming={confirming}
           setConfirming={setConfirming}
           busy={busy}
-          pending={remove.isPending}
+          pending={data.removing}
           error={remove.error}
           onRemove={() => remove.mutate()}
           colors={c}
@@ -841,11 +954,19 @@ function ProjectModels({
 }) {
   const project = data.projects.find((entry) => entry.name === name);
   const write = useRpc(setupProject);
+  const drop = useRpc(setupProjectRemove);
   const queries = useQueryClient();
   const [draft, setDraft] = useState((project?.models ?? {}) as Choices);
   const save = useMutation({
     mutationFn: (models: Choices) => write({ name, models: models as never }),
     onSuccess: () => void queries.invalidateQueries({ queryKey: STATE_KEY }),
+  });
+  const dropIt = useMutation({
+    mutationFn: () => drop({ name }),
+    onSuccess: () => {
+      void queries.invalidateQueries({ queryKey: STATE_KEY });
+      open({ part: "projects" });
+    },
   });
   const back = <Link label="Projects" icon="ArrowLeft" onPress={() => open({ part: "projects" })} colors={c} />;
   if (!project || !data.applied) {
@@ -853,8 +974,7 @@ function ProjectModels({
       <>
         {back}
         <Text style={{ color: c.foregroundMuted }}>
-          {name} is not a project of the room. Open {OWN} in the {ROOM_PROJECT} project and write: set up project {name}
-          .
+          {name} is not a project of the room. Put it in from the Projects part of this screen.
         </Text>
       </>
     );
@@ -956,6 +1076,13 @@ function ProjectModels({
       {roles.length ? (
         <Link label="Use the room's table for every role" icon="RotateCcw" onPress={() => setDraft({})} colors={c} />
       ) : null}
+      <Link
+        label={dropIt.isPending ? "Taking out…" : "Take out of the room"}
+        icon="Trash2"
+        onPress={() => !dropIt.isPending && dropIt.mutate()}
+        colors={c}
+      />
+      {dropIt.error ? <Text style={{ ...small(c), color: c.statusDanger }}>{failed(dropIt.error)}</Text> : null}
     </Card>
   );
 

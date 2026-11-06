@@ -7,7 +7,22 @@ import { registerProject, unregisterProject } from "../server/orchestration/onbo
 import { loadRegistry, projectBlock } from "../server/orchestration/registry";
 import { roleSkillNames } from "../server/orchestration/runtimes";
 
-const ROOM_SEATS = ["claude-hq", "claude-supervisor", "claude-lead", "claude-peer", "codex-peer"];
+const ROOM_SEATS = [
+  "claude-hq",
+  "claude-supervisor",
+  "claude-lead",
+  "claude-peer",
+  "codex-peer",
+  // every provider the shipped table names is enabled at setup, the ACP seats among them
+  "devin-hq",
+  "devin-supervisor",
+  "devin-lead",
+  "devin-peer",
+  "grok-hq",
+  "grok-supervisor",
+  "grok-lead",
+  "grok-peer",
+];
 const seatsFile = join(ROOM_HOME, "seats.json");
 const marker = join(PROJECT, ".seatwork", "room.json");
 let asked: string[][] = [];

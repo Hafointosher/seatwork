@@ -1,4 +1,4 @@
-import { ROOM_HOME, shipSql } from "./support/room";
+import { aclPrivate, ROOM_HOME, shipSql } from "./support/room";
 import assert from "node:assert/strict";
 import { getEventListeners } from "node:events";
 import { chmodSync, statSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
@@ -285,7 +285,8 @@ test("a key the person saves is kept for them alone and used by the next call, a
   assert.equal(jev.keySource(), "none");
   jev.saveKey("key-old");
   assert.equal(jev.keySource(), "file");
-  assert.equal(statSync(join(dir, "openrouter.key")).mode & 0o777, 0o600);
+  if (process.platform === "win32") assert.ok(aclPrivate(join(dir, "openrouter.key")));
+  else assert.equal(statSync(join(dir, "openrouter.key")).mode & 0o777, 0o600);
   const refused = await jev.check();
   assert.deepEqual([refused.ok, refused.ms], [false, null]);
   assert.match(String(refused.why), /401/);
@@ -305,12 +306,17 @@ test(
     const { jev, dir } = district(POLICY("jev"), none.fetch, false);
     const file = join(dir, "jev.key");
     writeFileSync(file, "key-jev\n");
-    chmodSync(file, 0o000);
+    // a file Windows cannot read that asks no privilege: a folder in its place
+    if (process.platform === "win32") {
+      rmSync(file);
+      mkdirSync(file);
+    } else chmodSync(file, 0o000);
     assert.match(String(jev.why()), /no key for jev/);
     const fork = await jev.routes("t", "s", { fork: { type: "noul", instructions: "Is it done?" } }, 0.9);
     assert.match(String(fork.fork.why), /no key for jev/);
     assert.equal(none.sent.length, 0);
-    chmodSync(file, 0o600);
+    if (process.platform === "win32") rmSync(file, { recursive: true });
+    else chmodSync(file, 0o600);
     jev.close();
   },
 );

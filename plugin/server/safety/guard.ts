@@ -1,4 +1,4 @@
-import { evaluate, type Evaluation, type GateConfig, type Tools } from "./gate/evaluate";
+import { evaluate, type Evaluation, type GateConfig, type ShellKind, type Tools } from "./gate/evaluate";
 import { effectFinding, namedFinding, worse } from "./gate/findings";
 import { valueOf } from "./gate/paths";
 import { throughLinks, whereOf, whereOfPath } from "./gate/places";
@@ -63,9 +63,10 @@ export class Guard {
     cli: string,
     command: string,
     cwd: string | null,
+    kind: ShellKind = "sh",
   ): Promise<{ writes: boolean; moves: string | null }> {
     const found = await this.read({ seat, cli, command, cwd, began: process.hrtime.bigint() }, async (place) =>
-      evaluate(command, cwd, place, this.gateConfig(), this.deps.tools(seat)),
+      evaluate(command, cwd, place, this.gateConfig(), this.deps.tools(seat), kind),
     );
     return { writes: found.changes, moves: found.moves ?? null };
   }
@@ -95,6 +96,16 @@ export class Guard {
       const found = effectFinding("read", where, `read ${path}`);
       return { findings: found ? [found] : [], doubts: [], changes: false };
     });
+  }
+
+  /** A call the room cannot read, kept as unread so the owner still sees it ran. */
+  async checkOther(seat: SeatRef | null, cli: string, command: string, cwd: string | null): Promise<void> {
+    const call = { seat, cli, command: command.slice(0, SHOWN_CHARS), cwd, began: process.hrtime.bigint() };
+    await this.read(call, async () => ({
+      findings: [],
+      doubts: [{ reason: "the room cannot read this call", text: call.command }],
+      changes: false,
+    }));
   }
 
   /** The gate's settings, as the policy sets them. */

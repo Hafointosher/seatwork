@@ -1,6 +1,7 @@
-import { deferred, PROJECT, ROOM_HOME } from "./support/room";
+import { aclPrivate, deferred, PROJECT, ROOM_HOME } from "./support/room";
 import { BRIEF, prompt } from "./support/timeline";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { incidentOf } from "../server/operations/lines";
@@ -17,10 +18,27 @@ import { DatabaseSync } from "node:sqlite";
 const runtimes = join(ROOM_HOME, "runtimes");
 
 const { call, agents, context, seat } = pluginRoom(
-  ["claude-hq", "claude-supervisor", "claude-lead", "claude-peer", "pi-peer", "codex-peer", "opencode-peer"],
+  [
+    "claude-hq",
+    "claude-supervisor",
+    "claude-lead",
+    "claude-peer",
+    "pi-peer",
+    "codex-peer",
+    "opencode-peer",
+    "devin-hq",
+    "devin-supervisor",
+    "devin-lead",
+    "devin-peer",
+    "grok-hq",
+    "grok-supervisor",
+    "grok-lead",
+    "grok-peer",
+  ],
   {
     before: () => {
-      chmodSync(ROOM_HOME, 0o755); // as a room home made under the usual umask
+      if (process.platform === "win32") execFileSync("icacls", [ROOM_HOME, "/grant", "Everyone:(OI)(CI)(RX)"]);
+      else chmodSync(ROOM_HOME, 0o755); // as a room home made under the usual umask
       // this room's owner gave the Peer one more model, on Pi and OpenCode
       const table = join(ROOM_HOME, "room", "models.json");
       const models = JSON.parse(readFileSync(table, "utf8"));
@@ -42,7 +60,7 @@ function createRequest(provider: string) {
 }
 
 test("the plugin makes the room home private to its owner", () => {
-  assert.equal(statSync(ROOM_HOME).mode & 0o077, 0);
+  assert.ok(aclPrivate(ROOM_HOME));
 });
 
 /** The env Paseo launches a session with after the room's hook: on a reopening Paseo itself hands in none. */

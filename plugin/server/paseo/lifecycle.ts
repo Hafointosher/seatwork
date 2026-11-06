@@ -2,7 +2,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PluginBeforeRequests, PluginServerContext } from "@getpaseo/plugin/server";
 import { collectFiles } from "../gc";
-import { projectTables, writeProjectModels } from "../orchestration/onboard";
+import {
+  knownProjects,
+  projectTables,
+  registerProject,
+  unregisterProject,
+  writeProjectModels,
+} from "../orchestration/onboard";
 import { enabledSeats, HARNESSES, parseSeat } from "../orchestration/seats";
 import { PASEO_HOME, ROOM_HOME } from "../paths";
 import { startRoom, type Room } from "../room/room";
@@ -34,6 +40,8 @@ export class Lifecycle {
   private unhook = () => {};
   private behind: { why: string; at: number } | null = null;
   private busy: Promise<unknown> = Promise.resolve();
+  private removing = false;
+  private removal: { result?: Awaited<ReturnType<typeof takeRoomOut>>; error?: string } | null = null;
   private readonly fileSweep: ReturnType<typeof setInterval>;
 
   constructor(
@@ -135,12 +143,17 @@ export class Lifecycle {
       table: roomModels(pluginDir) as never,
       harnesses,
       projects: (setup ? projectTables() : []) as never,
+      known: setup ? await knownProjects(() => this.host.projects()).catch(() => []) : [],
       checks,
+      removing: this.removing,
+      removed: this.removal?.result ?? null,
+      removeError: this.removal?.error ?? null,
     };
   }
 
   /** Sets the room up on the screen's choices with the daemon's own switches, and starts it on them. */
   init(paseo: PaseoApi, choices: { models: Record<string, unknown>; chime: boolean }) {
+    this.removal = null;
     return this.oneAtATime(async () => {
       this.host.use(paseo);
       const before = readSetup(ROOM_HOME);
@@ -169,22 +182,43 @@ export class Lifecycle {
     });
   }
 
-  /** Stops the room and takes it out of Paseo, once every room seat is archived. */
+  /** Starts stopping the room and taking it out of Paseo: the work runs behind the screen's poll, since archiving each open seat and moving the home aside outlast an RPC's time. */
   remove(paseo: PaseoApi) {
-    return this.oneAtATime(async () => {
-      this.host.use(paseo);
-      if (!isSetUp(ROOM_HOME)) throw new Error("no room is set up on this daemon");
-      const open = [...(await this.host.live()).values()].filter((seat) => parseSeat(seat.provider));
-      if (open.length)
-        throw new Error(
-          `${open.length} room seat${open.length === 1 ? " is" : "s are"} still open (${open
-            .slice(0, 3)
-            .map((seat) => seat.title ?? seat.id)
-            .join(", ")}${open.length > 3 ? ", …" : ""}); archive them first`,
-        );
+    this.host.use(paseo);
+    if (this.removing) return { started: false };
+    if (!isSetUp(ROOM_HOME)) throw new Error("no room is set up on this daemon");
+    this.removing = true;
+    this.removal = null;
+    void this.oneAtATime(async () => {
+      // the room stops first, so its keep cannot start a seat over the archiving below
       await this.stop();
+      const openSeats = async () =>
+        [...(await this.host.live()).entries()].filter(([, seat]) => parseSeat(seat.provider));
+      // a seat can still come up while the archiving runs, so it is checked again until the daemon shows none
+      let left = await openSeats();
+      for (let round = 0; left.length && round < 3; round += 1) {
+        await Promise.all(left.map(([id]) => this.host.archive(id).catch(() => {})));
+        left = await openSeats();
+      }
+      if (left.length)
+        throw new Error(
+          `${left.length} room seat${left.length === 1 ? " is" : "s are"} still open (${left
+            .slice(0, 3)
+            .map(([, seat]) => seat.title ?? "?")
+            .join(", ")}${left.length > 3 ? ", …" : ""}); archive them first`,
+        );
       return takeRoomOut(paseo, true);
-    });
+    }).then(
+      (result) => {
+        this.removal = { result };
+        this.removing = false;
+      },
+      (error) => {
+        this.removal = { error: error instanceof Error ? error.message : String(error) };
+        this.removing = false;
+      },
+    );
+    return { started: true };
   }
 
   /** A project's own table of models; a role put on an agent CLI the room has no seat for sets that seat up first. */
@@ -194,6 +228,36 @@ export class Lifecycle {
       if (!this.room) throw new Error("no room is set up on this daemon");
       if (this.room.filesFrom !== this.version) throw new Error(`seatwork: ${this.whyRefused()}. Press Apply first`);
       return writeProjectModels(name, models, (providers) => this.addSeats(providers));
+    });
+  }
+
+  /** Puts one of the app's projects in the room's registry, as the room's own seat's tool would; its mission is written when given. */
+  async projectAdd(paseo: PaseoApi, input: { path: string; name?: string; mission?: string }) {
+    await this.bringUp(paseo, true);
+    return this.oneAtATime(async () => {
+      if (!this.room) throw new Error("no room is set up on this daemon");
+      if (this.room.filesFrom !== this.version) throw new Error(`seatwork: ${this.whyRefused()}. Press Apply first`);
+      const message = await registerProject(
+        () => this.host.projects(),
+        input,
+        (providers) => this.addSeats(providers),
+      );
+      return { message };
+    });
+  }
+
+  /** Takes a project out of the registry, refused while a seat of it is open, as the room's own seat's tool would. */
+  async projectRemove(paseo: PaseoApi, name: string) {
+    await this.bringUp(paseo, true);
+    return this.oneAtATime(async () => {
+      if (!this.room) throw new Error("no room is set up on this daemon");
+      if (this.room.filesFrom !== this.version) throw new Error(`seatwork: ${this.whyRefused()}. Press Apply first`);
+      const message = await unregisterProject(name, async () =>
+        [...(await this.host.live()).values()]
+          .filter((seat) => parseSeat(seat.provider) && seat.cwd)
+          .map((seat) => ({ title: seat.title ?? seat.id, cwd: seat.cwd as string })),
+      );
+      return { message };
     });
   }
 

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { inRoom, specFromTitle } from "../../shared/workflow";
 import type { Host } from "../host";
 import type { Asker } from "../orchestration/forks";
@@ -62,7 +62,7 @@ function projectAt(cwd: string, role: string, provider: string): Project | null 
     const marker = findRoomMarker(cwd);
     return marker
       ? {
-          name: marker.root.split("/").pop() ?? marker.root,
+          name: basename(marker.root),
           root: marker.root,
           room: marker.room,
           mission: marker.mission,
@@ -89,6 +89,12 @@ function tableOf(project: Project | null): { models: Models; own: string | null 
       )
     : loadModels();
   return { models, own };
+}
+
+/** The provider the room's table gives a role's seat, set up or not; undefined where the table gives the role none. */
+export function providerOf(role: string): string | undefined {
+  const entry = tableOf(null).models.seats?.[role]?.provider;
+  return typeof entry === "string" ? entry.split("/")[0] : undefined;
 }
 
 /** What the table in force at a folder makes of a seat on this model. */
