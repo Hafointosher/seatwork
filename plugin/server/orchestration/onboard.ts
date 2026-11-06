@@ -9,6 +9,9 @@ import {
   readRoomJson,
   realOrSelf,
   roomProjectDir,
+  samePath,
+  uniqueProjects,
+  withRegistryLock,
   writeRegistryFile,
   type ProjectEntry,
 } from "./registry";
@@ -26,7 +29,7 @@ const enabledProviders = () => enabledSeats().map((seat) => seat.provider);
 /** The app's projects, without the room's own. */
 async function appProjects(list: ProjectList) {
   const own = roomProjectDir();
-  return (await list()).map((p) => ({ name: p.name, path: realOrSelf(p.path) })).filter((p) => p.path !== own);
+  return (await list()).map((p) => ({ name: p.name, path: realOrSelf(p.path) })).filter((p) => !samePath(p.path, own));
 }
 
 /** A registry name: lower-case letters, digits and dashes, as it appears in `.seatwork/<name>-law.md`. */
@@ -42,9 +45,14 @@ function writeMarker(root: string, content: Record<string, unknown>): void {
   writeFileSync(join(root, ROOM_FOLDER, "room.json"), `${JSON.stringify(content, null, 2)}\n`);
 }
 
-/** The projects of the registry file as written. */
+/** The projects of the registry file as written, folders canonicalized; a hand-edited repeat names or paths a folder once. */
 function registryEntries(raw: Record<string, unknown>): ProjectEntry[] {
-  return (Array.isArray(raw.projects) ? raw.projects : []) as ProjectEntry[];
+  const entries = (Array.isArray(raw.projects) ? raw.projects : []) as ProjectEntry[];
+  return uniqueProjects(
+    entries
+      .filter((e) => typeof e?.cwd === "string" && typeof e?.name === "string")
+      .map((e) => ({ name: e.name, cwd: realOrSelf(e.cwd) })),
+  );
 }
 
 /** Writes a project's own model table, or takes it out; returns the seats set up for it; the table is checked before it is written, since one naming a seat the room lacks would refuse every seat. */
@@ -80,9 +88,9 @@ interface ProjectTable {
 
 /** The app's projects the room has not registered, beside its own, as the screen's add list wants them. */
 export async function knownProjects(list: ProjectList): Promise<{ name: string; root: string }[]> {
-  const taken = new Set((loadRegistry()?.projects ?? []).map((entry) => realOrSelf(entry.cwd)));
+  const taken = (loadRegistry()?.projects ?? []).map((entry) => realOrSelf(entry.cwd));
   return (await appProjects(list))
-    .filter((project) => !taken.has(project.path))
+    .filter((project) => !taken.some((root) => samePath(root, project.path)))
     .map((project) => ({ name: project.name, root: project.path }));
 }
 
@@ -90,6 +98,7 @@ export async function knownProjects(list: ProjectList): Promise<{ name: string; 
 export function projectTables(): ProjectTable[] {
   const providers = enabledProviders();
   return (loadRegistry()?.projects ?? []).map(({ name, cwd: root }): ProjectTable => {
+    if (!existsSync(root)) return { name, root, own: false, models: {}, error: "the project's folder is gone" };
     let models: unknown;
     try {
       models = readRoomJson(root).models;
@@ -143,19 +152,20 @@ export async function describeProjects(list: ProjectList): Promise<string> {
     return "Paseo has no project besides the room's own. Ask for the project to be added to Paseo first.";
   return projects
     .map((p) => {
-      const entry = registry?.projects.find((e) => e.cwd === p.path);
+      const entry = registry?.projects.find((e) => samePath(e.cwd, p.path));
       const has = (file: string) => (existsSync(join(p.path, ROOM_FOLDER, file)) ? "yes" : "no");
       const law = readLaw(p.path, entry?.name ?? slug(p.name)) ? "yes" : "no";
-      return `${entry ? `registered as ${entry.name}` : "NOT registered"} | ${p.name} | ${p.path} | mission: ${has("mission.md")} | law: ${law} | ${modelsLine(p.path)}`;
+      const gone = existsSync(p.path) ? "" : " | FOLDER GONE (stores will not resurrect it; unregister or restore it)";
+      return `${entry ? `registered as ${entry.name}` : "NOT registered"} | ${p.name} | ${p.path} | mission: ${has("mission.md")} | law: ${law} | ${modelsLine(p.path)}${gone}`;
     })
     .join("\n");
 }
 
 /** Refuses a project whose name another holds or that is listed under another name; returns its own entry, if any. */
 function claimOf(entries: readonly ProjectEntry[], name: string, path: string): { known: ProjectEntry | undefined } {
-  const clash = entries.find((e) => e.name === name && realOrSelf(e.cwd) !== path);
+  const clash = entries.find((e) => e.name === name && !samePath(realOrSelf(e.cwd), path));
   if (clash) throw new Error(`the name ${name} already belongs to ${clash.cwd}; give another name`);
-  const known = entries.find((e) => realOrSelf(e.cwd) === path);
+  const known = entries.find((e) => samePath(realOrSelf(e.cwd), path));
   if (known && known.name !== name) throw new Error(`${path} is already registered as ${known.name}`);
   return { known };
 }
@@ -181,9 +191,12 @@ export async function registerProject(
   if (mission) writeFileSync(join(seatwork, "mission.md"), `${mission}\n`);
   const law = args.law?.trim();
   if (law) writeFileSync(join(seatwork, `${name}-law.md`), `${law}\n`);
-  const raw = readRegistryFile();
-  const { known } = claimOf(registryEntries(raw), name, project.path);
-  if (!known) writeRegistryFile({ ...raw, projects: [...registryEntries(raw), { name, cwd: project.path }] });
+  const known = withRegistryLock(() => {
+    const raw = readRegistryFile();
+    const { known } = claimOf(registryEntries(raw), name, project.path);
+    if (!known) writeRegistryFile({ ...raw, projects: [...registryEntries(raw), { name, cwd: project.path }] });
+    return known;
+  });
   const missing = [
     existsSync(join(seatwork, "mission.md")) ? null : "mission (.seatwork/mission.md)",
     readLaw(project.path, name) ? null : `law (.seatwork/${name}-law.md: give \`law\`)`,
@@ -199,7 +212,7 @@ export async function unregisterProject(
 ): Promise<string> {
   const wanted = project.trim();
   const entry = registryEntries(readRegistryFile()).find(
-    (e) => e.name === wanted || realOrSelf(e.cwd) === realOrSelf(wanted),
+    (e) => e.name === wanted || samePath(realOrSelf(e.cwd), realOrSelf(wanted)),
   );
   if (!wanted || !entry) throw new Error(`${project} is not a registered project (seatwork_projects lists them)`);
   const root = realOrSelf(entry.cwd);
@@ -211,8 +224,11 @@ export async function unregisterProject(
         .map((seat) => seat.title)
         .join(", ")}${open.length > 3 ? ", …" : ""}); archive ${open.length === 1 ? "it" : "them"} first`,
     );
-  const raw = readRegistryFile();
-  const left = registryEntries(raw).filter((e) => !(e.name === entry.name && e.cwd === entry.cwd));
-  writeRegistryFile({ ...raw, projects: left });
+  const left = withRegistryLock(() => {
+    const raw = readRegistryFile();
+    const left = registryEntries(raw).filter((e) => !(e.name === entry.name && e.cwd === entry.cwd));
+    writeRegistryFile({ ...raw, projects: left });
+    return left;
+  });
   return `unregistered: ${entry.name} at ${root}. Its .seatwork/ files stay where they are, and seatwork_register_project brings it back. Registered now: ${left.map((e) => e.name).join(", ") || "no project, so no project seat can start"}.`;
 }

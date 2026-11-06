@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, test } from "node:test";
-import { registerProject, unregisterProject } from "../server/orchestration/onboard";
-import { loadRegistry, projectBlock } from "../server/orchestration/registry";
+import { describeProjects, projectTables, registerProject, unregisterProject } from "../server/orchestration/onboard";
+import { loadRegistry, projectBlock, realOrSelf } from "../server/orchestration/registry";
 import { roleSkillNames } from "../server/orchestration/runtimes";
 
 const ROOM_SEATS = [
@@ -143,6 +143,52 @@ test("a project leaves the registry without taking one registered at the same mo
     loadRegistry()?.projects.map((entry) => entry.name),
     ["other"],
   );
+});
+
+test("a registry file edited by hand cannot name or path a project twice: the first of each is the one kept", async () => {
+  const { other, both } = twoProjects();
+  await registerProject(both, { path: PROJECT }, setUpSeats);
+  writeFileSync(
+    join(ROOM_HOME, "projects.json"),
+    JSON.stringify({
+      projects: [
+        { name: "demo", cwd: PROJECT },
+        { name: "demo", cwd: other },
+        { name: "shadow", cwd: PROJECT },
+      ],
+    }),
+  );
+
+  const entries = loadRegistry()?.projects ?? [];
+  assert.deepEqual(
+    entries.map((e) => e.name),
+    ["demo"],
+    "the name demo and the folder PROJECT repeat: the second of each is dropped",
+  );
+  assert.equal(entries[0].cwd, realOrSelf(PROJECT), "the first demo keeps the folder; shadow's claim to it is dropped");
+});
+
+test("a registered project whose folder is gone says so, in its table and in the list a seat reads", async () => {
+  const { other, both } = twoProjects();
+  await registerProject(both, { path: PROJECT }, setUpSeats);
+  const gone = join(PROJECT, "..", "gone-project");
+  writeFileSync(
+    join(ROOM_HOME, "projects.json"),
+    JSON.stringify({
+      projects: [
+        { name: "demo", cwd: PROJECT },
+        { name: "gone", cwd: gone },
+      ],
+    }),
+  );
+
+  const table = projectTables().find((p) => p.name === "gone");
+  assert.equal(table?.error, "the project's folder is gone");
+  const list = await describeProjects(async () => [
+    { name: "demo", path: PROJECT },
+    { name: "gone", path: gone },
+  ]);
+  assert.match(list, /gone \| .*FOLDER GONE/);
 });
 
 test("a project seat is told which of its own skills the project law names", () => {

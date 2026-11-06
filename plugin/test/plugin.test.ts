@@ -288,6 +288,78 @@ for (const archive of ["works", "fails"] as const) {
   });
 }
 
+test("a seat claiming a parent that is no seat of the room is refused as a spawn outside the chain", async () => {
+  const toHq: string[] = [];
+  agents["hq-operator"] = {
+    refresh: async () => {},
+    current: () => ({ status: "idle", provider: "claude-hq" }),
+    send: async (text: string) => void toHq.push(text),
+  };
+  await call(
+    "on agent.created",
+    {
+      agent: {
+        id: "hq-operator",
+        parentAgentId: null,
+        provider: "claude-hq",
+        cwd: join(ROOM_HOME, "hq-seatwork"),
+        title: "[HQ] the room's operator",
+        workspaceId: null,
+      },
+    },
+    context,
+  );
+  const archived: string[] = [];
+  agents["outsider"] = { refresh: async () => {}, current: () => ({ status: "idle", provider: "claude" }) };
+  agents["stray-peer"] = {
+    refresh: async () => {},
+    current: () => ({ status: "idle", provider: "claude-peer" }),
+    archive: async () => void archived.push("stray-peer"),
+  };
+  await call(
+    "on agent.created",
+    {
+      agent: {
+        id: "stray-peer",
+        parentAgentId: "outsider",
+        provider: "claude-peer",
+        cwd: PROJECT,
+        title: "[Peer] stray",
+        workspaceId: null,
+      },
+    },
+    context,
+  );
+
+  assert.deepEqual(archived, ["stray-peer"], "a seat under an agent that is no seat is archived");
+  assert.match(toHq.join("\n"), /SPAWN REFUSED: a peer seat must be made by its owner/);
+});
+
+test("a seat under a parent the app no longer lists gets the doubt and is remembered", async () => {
+  const archived: string[] = [];
+  agents["late-lead"] = {
+    refresh: async () => {},
+    current: () => ({ status: "idle", provider: "claude-lead" }),
+    send: async () => {},
+    archive: async () => void archived.push("late-lead"),
+  };
+  await call(
+    "on agent.created",
+    {
+      agent: {
+        id: "late-lead",
+        parentAgentId: "gone-supervisor",
+        provider: "claude-lead",
+        cwd: PROJECT,
+        title: "[Lead] late",
+        workspaceId: null,
+      },
+    },
+    context,
+  );
+  assert.deepEqual(archived, [], "a parent gone or not yet remembered is not proof of a bypass");
+});
+
 const completed = { kind: "completed" };
 
 /** A turn that starts, and one that ends as the app reports it: with the seat's whole timeline. */

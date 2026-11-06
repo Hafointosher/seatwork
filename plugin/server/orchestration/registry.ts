@@ -1,4 +1,14 @@
-import { existsSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { REGISTRY_FILE, ROOM_FOLDER, ROOM_PROJECT_DIR } from "../paths";
 import { inRoom, ROOM_PROJECT } from "../../shared/workflow";
@@ -58,6 +68,19 @@ export function realOrSelf(path: string): string {
   }
 }
 
+/** The first of each name and each folder: a hand-edited file's repeats would match a folder against whoever won the race. */
+export function uniqueProjects(entries: ProjectEntry[]): ProjectEntry[] {
+  const key = (cwd: string) => (process.platform === "win32" ? cwd.toLowerCase() : cwd);
+  const names = new Set<string>();
+  const cwds = new Set<string>();
+  return entries.filter((entry) => {
+    if (names.has(entry.name) || cwds.has(key(entry.cwd))) return false;
+    names.add(entry.name);
+    cwds.add(key(entry.cwd));
+    return true;
+  });
+}
+
 /** projects.json is optional: without it the room is in open mode, and seats may be created anywhere. */
 export function loadRegistry(): Registry | null {
   if (!existsSync(REGISTRY_FILE)) return null;
@@ -65,9 +88,11 @@ export function loadRegistry(): Registry | null {
   const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
   return {
     ...(typeof parsed.roomProject === "string" ? { roomProject: realOrSelf(parsed.roomProject) } : {}),
-    projects: projects
-      .filter((p): p is ProjectEntry => typeof p?.cwd === "string" && typeof p?.name === "string")
-      .map((p) => ({ name: p.name, cwd: realOrSelf(p.cwd) })),
+    projects: uniqueProjects(
+      projects
+        .filter((p): p is ProjectEntry => typeof p?.cwd === "string" && typeof p?.name === "string")
+        .map((p) => ({ name: p.name, cwd: realOrSelf(p.cwd) })),
+    ),
   };
 }
 
@@ -76,10 +101,38 @@ export function readRegistryFile(): Record<string, unknown> {
   return existsSync(REGISTRY_FILE) ? (JSON.parse(readFileSync(REGISTRY_FILE, "utf8")) as Record<string, unknown>) : {};
 }
 
+const PAUSE = new Int32Array(new SharedArrayBuffer(4));
+let tmpCount = 0;
+
+/** Runs `work` holding the registry's lockfile, so a read-change-write in one process cannot lose another's; a lock older than a crash's span is taken over. */
+export function withRegistryLock<T>(work: () => T): T {
+  const lock = `${REGISTRY_FILE}.lock`;
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    try {
+      closeSync(openSync(lock, "wx"));
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > 30_000) rmSync(lock, { force: true });
+      } catch {}
+      if (Date.now() > deadline) throw new Error("the project registry is locked by another process; try again");
+      Atomics.wait(PAUSE, 0, 0, 25);
+    }
+  }
+  try {
+    return work();
+  } finally {
+    rmSync(lock, { force: true });
+  }
+}
+
 /** Writes the registry file whole by a rename: a reader sees the old file or the new one. */
 export function writeRegistryFile(content: Record<string, unknown>): void {
-  writeFileSync(`${REGISTRY_FILE}.tmp`, `${JSON.stringify(content, null, 2)}\n`, { mode: 0o600 });
-  renameSync(`${REGISTRY_FILE}.tmp`, REGISTRY_FILE);
+  const tmp = `${REGISTRY_FILE}.${process.pid}.${(tmpCount += 1)}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(content, null, 2)}\n`, { mode: 0o600 });
+  renameSync(tmp, REGISTRY_FILE);
 }
 
 /** Whether `child` is `parent` or lies inside it; `relative` reads separators and case as the platform's filesystem does. */
@@ -88,6 +141,12 @@ export function isInside(child: string, parent: string): boolean {
   const rel = relative(parent, child);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
+
+/** Two spellings of one folder: `resolve` keeps a caller's case when the folder is gone, and Windows reads case-blind. */
+export const samePath =
+  process.platform === "win32"
+    ? (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
+    : (a: string, b: string) => a === b;
 
 /** Where the room's own seats sit: `roomProject` in the registry, else the default. */
 export function roomProjectIn(registry: Registry | null): string {

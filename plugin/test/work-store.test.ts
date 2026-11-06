@@ -595,6 +595,7 @@ test("the stores of the projects a room names expire their closed issues; a proj
   const stores = new WorkStores(rules, () => {});
   const [one, two, none] = ["one", "two", "none"].map((name) => join(ROOM_HOME, `expire-${stores_(name)}`));
   for (const root of [one, two]) {
+    mkdirSync(root, { recursive: true }); // a registered project's folder exists; stores make only .seatwork inside it
     const { store } = stores.of(root);
     const made = store.create({ title: "finished" }, "lead");
     store.create({ title: "going on" }, "lead");
@@ -719,4 +720,30 @@ test("a work store made before the order index is brought to it when it opens, w
     /SCAN issues USING INDEX issues_by_order/,
   );
   back.close();
+});
+
+test("a room folder under a project's .seatwork is not made while projects.json still names the gone folder", () => {
+  const gone = join(ROOM_HOME, `gone-${stores_("proj")}`); // the project's folder was deleted with its entry kept
+  writeFileSync(join(ROOM_HOME, "projects.json"), JSON.stringify({ projects: [{ name: "gone", cwd: gone }] }));
+  try {
+    assert.throws(() => keptOutOfGit(join(gone, ".seatwork", ".work")), /the project folder .* is gone/);
+    assert.ok(!existsSync(gone), "no empty shell is resurrected");
+
+    const stray = join(ROOM_HOME, `stray-${stores_("dir")}`);
+    assert.equal(
+      keptOutOfGit(join(stray, ".seatwork", ".work")),
+      join(stray, ".seatwork", ".work"),
+      "a folder the registry never named is made whole as before",
+    );
+  } finally {
+    rmSync(join(ROOM_HOME, "projects.json"), { force: true });
+  }
+
+  const here = join(ROOM_HOME, `here-${stores_("proj")}`);
+  mkdirSync(here, { recursive: true });
+  assert.equal(keptOutOfGit(join(here, ".seatwork", ".work")), join(here, ".seatwork", ".work"));
+  assert.ok(existsSync(join(here, ".seatwork", ".work")));
+
+  const plain = join(ROOM_HOME, `plain-${stores_("dir")}`);
+  assert.equal(keptOutOfGit(plain), plain, "a folder with no .seatwork above it is made as before");
 });

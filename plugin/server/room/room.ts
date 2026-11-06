@@ -226,20 +226,19 @@ function gateRoute(safety: Safety, knowledge: Knowledge, log: (message: string) 
   };
 }
 
-/** A seat its creator was not allowed to create is archived, and the creator is told what happened. */
+/** A seat the room does not allow is archived, and `to` — a seat of the room — is told what happened. */
 async function refuseSpawn(
   room: RoomContext,
   agent: SeatEvent,
-  parent: string,
-  role: string,
-  what: string,
+  to: string | null,
+  subject: string,
+  detail: string,
 ): Promise<void> {
   const { host, engine, log } = room;
-  const allowed = (SPAWN[role] ?? []).join(", ") || "nothing";
-  log(`spawn refused: ${role} ${parent} created ${what} ${agent.id}; archiving it`);
+  log(`spawn refused: ${subject} — archiving ${agent.id}`);
   // the app sends a new agent its first prompt without waiting for this: the seat may be at work already
   let outcome =
-    "The room archived it. If you gave it a first prompt, that turn may have started before the archive: check what it changed.";
+    "The room archived it. If a first prompt reached it, that turn may have started before the archive: check what it changed.";
   try {
     await host.archive(agent.id);
   } catch (error) {
@@ -247,14 +246,15 @@ async function refuseSpawn(
     log(`spawn refused: could not archive ${agent.id}: ${reason}`);
     outcome = `The room could not archive it (${reason}), so it is still there: archive ${agent.id} yourself, then check what it changed.`;
   }
-  await engine.post({
-    from: fromRoom,
-    to: parent,
-    priority: "blocking",
-    subject: `SPAWN REFUSED: a ${role} may create only ${allowed}`,
-    body: `You created ${what} titled "${agent.title ?? ""}". ${outcome} Create only the roles your role allows (${allowed}), on the room's providers, and continue.`,
-    needs: "nothing",
-  });
+  if (to && engine.seat(to))
+    await engine.post({
+      from: fromRoom,
+      to,
+      priority: "blocking",
+      subject: `SPAWN REFUSED: ${subject}`,
+      body: `${detail} ${outcome}`,
+      needs: "nothing",
+    });
 }
 
 /** Refuses the start of a seat in a project the budget holds; the room's own seats are in none. */
@@ -397,16 +397,45 @@ function startTimers(room: RoomContext, gc: Collector): { touch(): void; stop():
   };
 }
 
+/** Whether a project seat claims a parent the app shows as no seat of the room — a spawn check skipped. A parent that is gone, not yet remembered, or one the app does not list gets the doubt. */
+async function orphanSeat(room: RoomContext, agent: SeatEvent): Promise<boolean> {
+  if (!agent.parentId) return false;
+  try {
+    const live = (await room.host.live()).get(agent.parentId);
+    return live !== undefined && parseSeat(live.provider) === null;
+  } catch {
+    return false;
+  }
+}
+
 /** A new seat of the room: the room remembers it, the guard notes where it starts, a reviewer joins its round. */
 async function seatCreated(room: RoomContext, agent: SeatEvent): Promise<void> {
   const seat = parseSeat(agent.provider);
   const parent = agent.parentId ? room.engine.seat(agent.parentId) : undefined;
   if (parent && !(seat && maySpawn(parent.role, seat.role, agent.title))) {
     const what = seat ? `a ${seat.role} seat` : `a non-room agent (provider ${agent.provider})`;
-    await refuseSpawn(room, agent, parent.agentId, parent.role, what);
+    const allowed = (SPAWN[parent.role] ?? []).join(", ") || "nothing";
+    await refuseSpawn(
+      room,
+      agent,
+      parent.agentId,
+      `a ${parent.role} may create only ${allowed}`,
+      `You created ${what} titled "${agent.title ?? ""}". Create only the roles your role allows (${allowed}), on the room's providers, and continue.`,
+    );
     return;
   }
   if (!seat) return;
+  if (!parent && !inRoom(seat.role) && (await orphanSeat(room, agent))) {
+    const operator = room.engine.allSeats().find((s) => inRoom(s.role))?.agentId ?? agent.parentId;
+    await refuseSpawn(
+      room,
+      agent,
+      operator,
+      `a ${seat.role} seat must be made by its owner`,
+      `A ${seat.role} seat titled "${agent.title ?? ""}" was created under ${agent.parentId}, which is no seat of the room. The room's chain starts it: ask the seat above for one.`,
+    );
+    return;
+  }
   const record = {
     agentId: agent.id,
     parentAgentId: agent.parentId,

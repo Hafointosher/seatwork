@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { ROOM_FOLDER } from "./paths";
+import { loadRegistry, samePath } from "./orchestration/registry";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { performance } from "node:perf_hooks";
 
@@ -66,10 +68,41 @@ const HISTORY = `CREATE TABLE IF NOT EXISTS schema_history (
 /** A room folder, made, with the note that keeps it out of the project's commits. */
 export function keptOutOfGit(dir: string): string {
   if (!existsSync(join(dir, ".gitignore"))) {
+    refuseResurrection(dir);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, ".gitignore"), "*\n");
   }
   return dir;
+}
+
+/** A store under a project's `.seatwork` is not made when the project's folder is gone while the registry still names it: a recursive mkdir would quietly resurrect it as an empty shell. */
+function refuseResurrection(dir: string): void {
+  for (let cursor = dir, i = 0; i < 64; i += 1) {
+    const parent = dirname(cursor);
+    if (parent === cursor) return;
+    if (basename(cursor) === ROOM_FOLDER) {
+      if (!existsSync(parent) && isRegistered(parent))
+        throw new Error(
+          `${dir} cannot be made: the project folder ${parent} is gone; unregister the project or point it at a folder that exists`,
+        );
+      return;
+    }
+    cursor = parent;
+  }
+}
+
+/** A missing folder is a lost project only while projects.json still names it; one it never knew may be made whole. */
+function isRegistered(root: string): boolean {
+  try {
+    const registry = loadRegistry();
+    if (!registry) return false;
+    return (
+      registry.projects.some((entry) => samePath(entry.cwd, root)) ||
+      (registry.roomProject !== undefined && samePath(registry.roomProject, root))
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** The scripts of a folder, in version order. */
