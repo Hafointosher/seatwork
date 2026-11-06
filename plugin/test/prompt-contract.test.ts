@@ -36,6 +36,15 @@ test("every role's prompt on every agent CLI is filled in and names only the roo
   }
 });
 
+test("a seat is told its machine's shell once, on Windows only, and a Devin seat's is named outright", () => {
+  for (const { role, harness, text } of prompts()) {
+    if (process.platform === "win32") assert.match(text, /This machine runs Windows: /, `${role} on ${harness}`);
+    else assert.doesNotMatch(text, /This machine runs Windows/, `${role} on ${harness}`);
+  }
+  const devin = rolePrompt("peer", { harness: "devin", params: params() });
+  if (process.platform === "win32") assert.match(devin, /Your shell is cmd\.exe/);
+});
+
 test("a role whose final message only a person reads is shown the line that puts a wait on that person's list", () => {
   const readByPerson = (role: string) =>
     ROLES.every((owner) => !childrenOf(owner).includes(role) || !routeOpen(role, owner));

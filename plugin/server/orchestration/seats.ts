@@ -79,6 +79,16 @@ interface PromptContext {
   models?: Models;
 }
 
+/** The seat's machine as it bears on shell calls, said once so a seat never spends turns probing quoting; on Windows only, and a Devin seat's shell is named outright since the room has seen it. */
+function machineNote(harness: Harness): string | null {
+  if (process.platform !== "win32") return null;
+  const shell =
+    harness === "devin"
+      ? "Your shell is cmd.exe"
+      : "If a POSIX spelling fails your shell is likely cmd.exe, which `echo %COMSPEC%` names";
+  return `This machine runs Windows: ${shell}. In cmd.exe use \`dir\`, \`cd /d\`, \`type\`, \`findstr\`, \`timeout /t N\`, \`&&\`, \`%VAR%\` and double quotes around a path that holds a space; \`ls\`, \`pwd\`, \`$VAR\`, 'single' quoting, \`sleep\`, \`find\`, \`grep\`, \`xargs\`, \`<<\` heredocs and \`/c/Users/...\` paths fail. When a command fights quoting, write the work into a .cjs file and run \`node\` on it.`;
+}
+
 /** A seat's prompt: the room's layer and its agent CLI's part, the same word for word for every seat of that CLI, then its role and spec; read on every call, and only a seat at home in the room is shown the room's directories. */
 export function rolePrompt(role: string, context: PromptContext): string {
   const texts = [
@@ -102,6 +112,7 @@ export function rolePrompt(role: string, context: PromptContext): string {
   const parts = [
     shared,
     cli,
+    machineNote(context.harness),
     `---\n\n# Seat: ${role}${context.spec ? ` (specialization: ${context.spec})` : ""}`,
     needsRoomDir ? `ROOM_DIR=${ROOM_DIR}. ROOM_HOME=${ROOM_HOME}.` : null,
     own,
