@@ -86,7 +86,7 @@ function machineNote(harness: Harness): string | null {
     harness === "devin"
       ? "Your shell is cmd.exe"
       : "If a POSIX spelling fails your shell is likely cmd.exe, which `echo %COMSPEC%` names";
-  return `This machine runs Windows: ${shell}. In cmd.exe use \`dir\`, \`cd /d\`, \`type\`, \`findstr\`, \`timeout /t N\`, \`&&\`, \`%VAR%\` and double quotes around a path that holds a space; \`ls\`, \`pwd\`, \`$VAR\`, 'single' quoting, \`sleep\`, \`find\`, \`grep\`, \`xargs\`, \`<<\` heredocs and \`/c/Users/...\` paths fail. When a command fights quoting, write the work into a .cjs file and run \`node\` on it.`;
+  return `This machine runs Windows: ${shell}. In cmd.exe use \`dir\`, \`cd /d\`, \`type\`, \`findstr\`, \`timeout /t N\`, \`&&\`, \`%VAR%\` and double quotes around a path that holds a space; \`ls\`, \`pwd\`, \`$VAR\`, 'single' quoting, \`sleep\`, \`find\`, \`grep\`, \`xargs\`, \`<<\` heredocs and \`/c/Users/...\` paths fail. When a command fights quoting, write the work into a file: a .cjs for \`node\`, a .sh for a bash you know — a bare \`bash\` on PATH may be WSL, which reads /mnt/c, not C:\\.`;
 }
 
 /** A seat's prompt: the room's layer and its agent CLI's part, the same word for word for every seat of that CLI, then its role and spec; read on every call, and only a seat at home in the room is shown the room's directories. */
