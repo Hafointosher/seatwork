@@ -11,6 +11,7 @@ import {
   roomProjectDir,
   samePath,
   uniqueProjects,
+  wellFormed,
   withRegistryLock,
   writeRegistryFile,
   type ProjectEntry,
@@ -47,12 +48,8 @@ function writeMarker(root: string, content: Record<string, unknown>): void {
 
 /** The projects of the registry file as written, folders canonicalized; a hand-edited repeat names or paths a folder once. */
 function registryEntries(raw: Record<string, unknown>): ProjectEntry[] {
-  const entries = (Array.isArray(raw.projects) ? raw.projects : []) as ProjectEntry[];
-  return uniqueProjects(
-    entries
-      .filter((e) => typeof e?.cwd === "string" && typeof e?.name === "string")
-      .map((e) => ({ name: e.name, cwd: realOrSelf(e.cwd) })),
-  );
+  const entries = (Array.isArray(raw.projects) ? raw.projects : []) as unknown[];
+  return uniqueProjects(entries.filter(wellFormed).map((e) => ({ name: e.name, cwd: realOrSelf(e.cwd) })));
 }
 
 /** Writes a project's own model table, or takes it out; returns the seats set up for it; the table is checked before it is written, since one naming a seat the room lacks would refuse every seat. */
@@ -211,12 +208,17 @@ export async function unregisterProject(
   openSeats: () => Promise<{ title: string; cwd: string }[]>,
 ): Promise<string> {
   const wanted = project.trim();
-  const entry = registryEntries(readRegistryFile()).find(
-    (e) => e.name === wanted || samePath(realOrSelf(e.cwd), realOrSelf(wanted)),
-  );
+  const entries = registryEntries(readRegistryFile());
+  const entry = entries.find((e) => e.name === wanted || samePath(realOrSelf(e.cwd), realOrSelf(wanted)));
   if (!wanted || !entry) throw new Error(`${project} is not a registered project (seatwork_projects lists them)`);
   const root = realOrSelf(entry.cwd);
-  const open = (await openSeats()).filter((seat) => isInside(realOrSelf(seat.cwd), root));
+  // a seat belongs to the deepest registered root its folder lies in, as projectRootOf resolves it: seats of a nested project are not this project's
+  const open = (await openSeats()).filter((seat) => {
+    const cwd = realOrSelf(seat.cwd);
+    return (
+      isInside(cwd, root) && !entries.some((e) => e !== entry && e.cwd.length > root.length && isInside(cwd, e.cwd))
+    );
+  });
   if (open.length)
     throw new Error(
       `${open.length} seat${open.length === 1 ? "" : "s"} of ${entry.name} ${open.length === 1 ? "is" : "are"} still open (${open

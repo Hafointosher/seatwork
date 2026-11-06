@@ -2,11 +2,12 @@ import { appendFileSync, mkdirSync } from "node:fs";
 import { privateEntry } from "../win32";
 import { join } from "node:path";
 import { inRoom, maySpawn, reviews, ROLES, ROOM_ROLE, routeOpen, SPAWN, traits } from "../../shared/workflow";
+import settings from "../../shared/settings.json";
 import { MailEngine, ROOM_MAIL } from "../coordination/engine";
 import { Collector } from "../gc";
 import { HostNotReady, type Host } from "../host";
 import { McpHttpServer, type Route } from "../mcp-http";
-import { findProject, loadRegistry, projectRootOf, roomProjectDir } from "../orchestration/registry";
+import { findProject, loadRegistry, projectRootOf, roomProjectDir, samePath } from "../orchestration/registry";
 import { Forks } from "../orchestration/forks";
 import { Recovery, resumeDue } from "../orchestration/recovery";
 import { ReviewGate } from "../orchestration/review-gate";
@@ -264,6 +265,19 @@ function checkBudget(operations: Operations, request: SeatLaunch): void {
   const project = projectRootOf(request.cwd);
   const held = operations.holdsProject(project);
   if (held) throw new Error(`seatwork: ${request.provider} refused: ${project} is held by the room's budget: ${held}`);
+}
+
+/** Refuses a new seat once the room already holds the most open seats it may; an app that cannot list its agents proves nothing, so the seat starts. */
+async function checkSeatMost(room: RoomContext, request: SeatLaunch): Promise<void> {
+  const seat = parseSeat(request.provider);
+  if (!seat) return;
+  const live = await room.host.live().catch(() => null);
+  if (live === null) return;
+  const open = room.engine.allSeats().filter((one) => live.has(one.agentId));
+  if (open.length >= settings.openSeatsMost)
+    throw new Error(
+      `seatwork: ${request.provider} refused: ${open.length} seats of the room are already open, the most it holds (${settings.openSeatsMost}); archive finished seats first`,
+    );
 }
 
 /** The decision model's pick among the open asks an answer may settle, or null to keep the engine's own rule. */
@@ -570,8 +584,9 @@ function startOperations(policy: RuntimePolicy, operators: ReadonlySet<string>, 
         needs: "nothing",
         ...more,
       }),
-    // the room's own seats are in no project a cap reaches
-    projectOf: (seat) => (inRoom(room().engine.seat(seat)?.role) ? null : room().engine.projectOf(seat)),
+    // the room's own seats spend under the room's own project: on the books like any project's, never held by a cap
+    projectOf: (seat) => (inRoom(room().engine.seat(seat)?.role) ? roomProjectDir() : room().engine.projectOf(seat)),
+    own: (project) => samePath(project, roomProjectDir()),
     topSeat: (project) => topSeatOf(room().engine, project),
     lifted: () => room().engine.sweep(),
     registered: (project) => {
@@ -732,6 +747,7 @@ export function startRoom(input: {
           `seatwork: the room's server could not listen on 127.0.0.1:${served.port()} (${unbound}); no seat starts until the room is started again`,
         );
       checkBudget(operations, request);
+      await checkSeatMost(room, request);
       const launched = await launch(request, policy, log, room.forks);
       // agent.session_open ties this nonce to the agent id
       const nonce = room.callers.issue();

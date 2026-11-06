@@ -191,6 +191,43 @@ test("a registered project whose folder is gone says so, in its table and in the
   assert.match(list, /gone \| .*FOLDER GONE/);
 });
 
+test("seats of a project nested inside another do not stop the outer one's unregister", async () => {
+  const inner = join(PROJECT, "inner");
+  // the seat folders exist, as a live seat's always does: a missing one resolves to a spelling that is no real path
+  mkdirSync(join(inner, "src"), { recursive: true });
+  mkdirSync(join(PROJECT, "src"));
+  const three = async () => [
+    { name: "demo", path: PROJECT },
+    { name: "inner", path: inner },
+  ];
+  await registerProject(three, { path: PROJECT }, setUpSeats);
+  await registerProject(three, { path: inner }, setUpSeats);
+  // a seat open in the nested project's folder belongs to it, not to the outer project
+  const inInner = async () => [{ title: "[Peer] inner", cwd: join(inner, "src") }];
+  assert.match(await unregisterProject("demo", inInner), /^unregistered: demo/);
+
+  await registerProject(three, { path: PROJECT }, setUpSeats);
+  const inOuter = async () => [{ title: "[Peer] outer", cwd: join(PROJECT, "src") }];
+  await assert.rejects(unregisterProject("demo", inOuter), /1 seat of demo is still open/);
+});
+
+test("a registry file's malformed entries are dropped: a name that is no slug and a folder that is not absolute", () => {
+  writeFileSync(
+    join(ROOM_HOME, "projects.json"),
+    JSON.stringify({
+      projects: [
+        { name: "Not A Slug", cwd: PROJECT },
+        { name: "relative", cwd: "projects/thing" },
+        { name: "fine", cwd: PROJECT },
+      ],
+    }),
+  );
+  assert.deepEqual(
+    loadRegistry()?.projects.map((e) => e.name),
+    ["fine"],
+  );
+});
+
 test("a project seat is told which of its own skills the project law names", () => {
   const law = "## Policy\n- Tests: proof a regression would break (`test-audit` applies)";
   const block = (role: string) => projectBlock("demo", PROJECT, null, law, roleSkillNames(role));

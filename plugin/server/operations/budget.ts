@@ -25,6 +25,7 @@ interface BudgetDeps {
   log(line: string): void;
   lifted(project: string): Promise<void>;
   registered(project: string): boolean;
+  own?(project: string): boolean;
 }
 
 interface Cap {
@@ -183,9 +184,9 @@ export class Budget {
     this.review(project, sums, day);
   }
 
-  /** Holds a project whose day has reached its cap and that nothing holds today. */
+  /** Holds a project whose day has reached its cap and that nothing holds today; the room's own project spends on the books, never held. */
   private review(project: string, sums: Sums, day: string): void {
-    if (!project || this.held.get(project)?.day === day) return;
+    if (!project || this.deps.own?.(project) === true || this.held.get(project)?.day === day) return;
     const cap = this.capOf(project);
     const reason = cap && reached(cap, sums);
     if (!reason) return;

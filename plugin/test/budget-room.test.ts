@@ -102,6 +102,17 @@ test("a worktree of a held project outside its folder starts no seat; a cap the 
   await call("before agent.create", createRequest("claude-peer", outside), context);
 });
 
+test("the room's own seats spend under the room's own project, which a cap never holds", async () => {
+  const hq = await seat("hq-own", "claude-hq", null, "[HQ] own", roomProjectDir());
+  editPolicy((policy) => void (policy.budget.projects = { [roomProjectDir()]: { dailyUsd: 0.01 } }));
+  await hq.endsTurn("DONE: room work.", 3);
+  const view = JSON.parse(await hq.call("seatwork_room", { do: "budget" })) as {
+    budget: { held: { project: string }[]; projects: { project: string; today: { usd: number; turns: number } }[] };
+  };
+  assert.deepEqual(view.budget.projects.find((one) => one.project === roomProjectDir())?.today, { usd: 3, turns: 1 });
+  assert.deepEqual(view.budget.held, [], "the room's own project is never held");
+});
+
 test("an orchestrating seat reads what its project spent today, in all and by role, beside its daily cap", async () => {
   const read = project("budget-read");
   editPolicy((policy) => void (policy.budget.projects[read] = { dailyUsd: 50, dailyTurns: 400 }));

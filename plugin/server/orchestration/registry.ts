@@ -81,6 +81,17 @@ export function uniqueProjects(entries: ProjectEntry[]): ProjectEntry[] {
   });
 }
 
+/** A registry entry that is not plainly malformed: a name in the slug form registerProject writes, and an absolute folder. */
+export function wellFormed(entry: unknown): entry is ProjectEntry {
+  const e = entry as Partial<ProjectEntry> | null;
+  return (
+    typeof e?.name === "string" &&
+    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(e.name) &&
+    typeof e?.cwd === "string" &&
+    isAbsolute(e.cwd)
+  );
+}
+
 /** projects.json is optional: without it the room is in open mode, and seats may be created anywhere. */
 export function loadRegistry(): Registry | null {
   if (!existsSync(REGISTRY_FILE)) return null;
@@ -88,11 +99,7 @@ export function loadRegistry(): Registry | null {
   const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
   return {
     ...(typeof parsed.roomProject === "string" ? { roomProject: realOrSelf(parsed.roomProject) } : {}),
-    projects: uniqueProjects(
-      projects
-        .filter((p): p is ProjectEntry => typeof p?.cwd === "string" && typeof p?.name === "string")
-        .map((p) => ({ name: p.name, cwd: realOrSelf(p.cwd) })),
-    ),
+    projects: uniqueProjects(projects.filter(wellFormed).map((p) => ({ name: p.name, cwd: realOrSelf(p.cwd) }))),
   };
 }
 

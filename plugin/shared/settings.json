@@ -1,5 +1,6 @@
 {
-  "$comment": "The plugin's own numbers, compiled into it: unlike paseo/policy.json they are not a machine's choice and are not copied to the room home. keepLogDays: how long GC keeps what the room leaves behind (logs, seat records, backups, handoffs) and how far back room stats look. keepRemovedDays: how long a room home or a project's room files set aside by Remove are kept.",
+  "$comment": "The plugin's own numbers, compiled into it: unlike paseo/policy.json they are not a machine's choice and are not copied to the room home. keepLogDays: how long GC keeps what the room leaves behind (logs, seat records, backups, handoffs) and how far back room stats look. keepRemovedDays: how long a room home or a project's room files set aside by Remove are kept. openSeatsMost: the most seats of the room open at once; a create past it is refused.",
   "keepLogDays": 3,
-  "keepRemovedDays": 30
+  "keepRemovedDays": 30,
+  "openSeatsMost": 64
 }
